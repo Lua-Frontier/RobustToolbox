@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
@@ -81,10 +81,9 @@ public sealed class GameSavesSystem : EntitySystem
         var uncompressedStream = new MemoryStream();
 
         _serializer.SerializeDirect(uncompressedStream, MappingNodeToString(data));
-
-        var uncompressed = uncompressedStream.AsSpan();
+        var uncompressed = uncompressedStream.ToArray();
         var poolData = ArrayPool<byte>.Shared.Rent(uncompressed.Length);
-        uncompressed.CopyTo(poolData);
+        uncompressed.CopyTo(poolData.AsSpan(0, uncompressed.Length));
 
         if (_resourceManager.UserData.RootDir == null)
             return; // can't save anything
@@ -100,8 +99,9 @@ public sealed class GameSavesSystem : EntitySystem
                 buf.AsSpan(4, bound),
                 poolData.AsSpan(0, uncompressed.Length));
 
+            BitConverter.TryWriteBytes(buf.AsSpan(0, 4), uncompressed.Length);
             var filePath = Path.Combine(_resourceManager.UserData.RootDir, path.Filename + Extension);
-            File.WriteAllBytes(filePath, buf);
+            File.WriteAllBytes(filePath, buf.AsSpan(0, 4 + (int)compressedLength).ToArray());
         }
         finally
         {
@@ -117,16 +117,25 @@ public sealed class GameSavesSystem : EntitySystem
 
         var intBuf = new byte[4];
 
-        using var fileStream = _resourceManager.ContentFileRead(path);
-        using var decompressStream = new ZStdDecompressStream(fileStream, false);
+        if (_resourceManager.UserData.RootDir == null) return false;
+
+        var filePath = Path.Combine(_resourceManager.UserData.RootDir, path.Filename + Extension);
+        if (!File.Exists(filePath)) return false;
+
+        using var fileStream = File.OpenRead(filePath);
 
         fileStream.ReadExactly(intBuf);
         var uncompressedSize = BitConverter.ToInt32(intBuf);
 
-        var decompressedStream = new MemoryStream(uncompressedSize);
+        using var decompressStream = new ZStdDecompressStream(fileStream, false);
+
+        var decompressedStream = uncompressedSize > 0
+            ? new MemoryStream(uncompressedSize)
+            : new MemoryStream();
+
         decompressStream.CopyTo(decompressedStream);
         decompressedStream.Position = 0;
-        DebugTools.Assert(uncompressedSize == decompressedStream.Length);
+        if (uncompressedSize > 0) DebugTools.Assert(uncompressedSize == decompressedStream.Length);
 
         while (decompressedStream.Position < decompressedStream.Length)
         {
@@ -151,7 +160,7 @@ public sealed class GameSavesSystem : EntitySystem
         var stream = new StringReader(yml);
         foreach (var document in DataNodeParser.ParseYamlStream(stream))
         {
-            node = (MappingDataNode) document.Root;
+            node = (MappingDataNode)document.Root;
             return true;
         }
 

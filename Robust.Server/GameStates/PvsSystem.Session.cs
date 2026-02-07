@@ -36,7 +36,7 @@ internal sealed partial class PvsSystem
         return pvsSession;
     }
 
-    internal void ComputeSessionState(PvsSession session)
+    internal bool TryComputeSessionState(PvsSession session)
     {
         UpdateSession(session);
 
@@ -48,6 +48,21 @@ internal sealed partial class PvsSystem
         _playerManager.GetPlayerStates(session.FromTick, session.PlayerStates);
 
         // lastAck varies with each client based on lag and such, we can't just make 1 global state and send it to everyone
+
+        if (_maxEntityStates > 0 && session.States.Count > _maxEntityStates)
+        {
+            if (session.Session.Channel is { } channel && channel is not DummyChannel)
+            {
+                Log.Warning(
+                    "Disconnecting {0} for exceeding net.pvs_max_entity_states. Count={1} Limit={2}",
+                    session.Session,
+                    session.States.Count,
+                    _maxEntityStates);
+                channel.Disconnect($"PVS state overflow ({session.States.Count} > {_maxEntityStates})");
+            }
+
+            return false;
+        }
 
         DebugTools.Assert(session.States.Select(x=> x.NetEntity).ToHashSet().Count == session.States.Count);
         DebugTools.AssertNull(session.State);
@@ -61,6 +76,7 @@ internal sealed partial class PvsSystem
 
         session.ForceSendReliably = session.RequestedFull
                                           || _gameTiming.CurTick > session.LastReceivedAck + (uint) ForceAckThreshold;
+        return true;
     }
 
     private void UpdateSession(PvsSession session)

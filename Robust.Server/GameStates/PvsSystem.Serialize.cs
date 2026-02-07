@@ -59,18 +59,43 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        ComputeSessionState(data);
-        InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
-        DebugTools.AssertEqual(data.StateStream, null);
-
-        // PVS benchmarks use dummy sessions.
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-        if (data.Session.Channel is not DummyChannel)
+        try
         {
-            data.StateStream = RobustMemoryManager.GetMemoryStream();
-            _serializer.SerializeDirect(data.StateStream, data.State);
-        }
+            if (!TryComputeSessionState(data))
+                return;
+            InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
+            DebugTools.AssertEqual(data.StateStream, null);
 
-        data.ClearState();
+            // PVS benchmarks use dummy sessions.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            if (data.Session.Channel is not DummyChannel)
+            {
+                data.StateStream = RobustMemoryManager.GetMemoryStream();
+                _serializer.SerializeDirect(data.StateStream, data.State);
+            }
+        }
+        finally
+        {
+            ReleasePooledStateData(data);
+            data.ClearState();
+        }
+    }
+
+    private void ReleasePooledStateData(PvsSession data)
+    {
+        var states = data.States;
+        for (var i = 0; i < states.Count; i++)
+        {
+            var state = states[i];
+            var changes = state.ComponentChanges.Value;
+            if (changes != null)
+                _componentChangeListPool.Return(changes);
+
+            if (state.NetComponents != null)
+            {
+                _netComponentSetPool.Return(state.NetComponents);
+                state.NetComponents = null;
+            }
+        }
     }
 }

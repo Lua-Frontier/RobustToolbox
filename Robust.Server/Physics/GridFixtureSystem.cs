@@ -30,6 +30,7 @@ namespace Robust.Server.Physics
         [Dependency] private readonly IConGroupController _conGroup = default!;
         [Dependency] private readonly EntityLookupSystem _lookup = default!;
         [Dependency] private readonly SharedMapSystem _maps = default!;
+        [Dependency] private readonly IPlayerManager _playerManager = default!;
         [Dependency] private readonly SharedPhysicsSystem _physics = default!;
         [Dependency] private readonly SharedTransformSystem _xformSystem = default!;
 
@@ -65,6 +66,7 @@ namespace Robust.Server.Physics
             SubscribeNetworkEvent<StopGridNodesMessage>(OnDebugStopRequest);
 
             Subs.CVar(_cfg, CVars.GridSplitting, SetSplitAllowed, true);
+            _playerManager.PlayerStatusChanged += OnPlayerStatusChanged;
         }
 
         private void SetSplitAllowed(bool value) => SplitAllowed = value;
@@ -72,7 +74,14 @@ namespace Robust.Server.Physics
         public override void Shutdown()
         {
             base.Shutdown();
+            _playerManager.PlayerStatusChanged -= OnPlayerStatusChanged;
             _subscribedSessions.Clear();
+        }
+
+        private void OnPlayerStatusChanged(object? sender, SessionStatusEventArgs args)
+        {
+            if (args.NewStatus == SessionStatus.Disconnected)
+                _subscribedSessions.Remove(args.Session);
         }
 
         /// <summary>

@@ -35,6 +35,36 @@ internal sealed partial class PvsSystem
 
         return pvsSession;
     }
+    internal void ComputeSessionState(PvsSession session)
+    {
+        if (session.Session is null)
+        {
+            // Minimal session update for replay.
+            session.FromTick = session.RequestedFull ? GameTick.Zero : session.LastReceivedAck;
+            session.LastInput = 0;
+            session.LastMessage = 0;
+            session.VisMask = EyeComponent.DefaultVisibilityMask;
+
+            if (CullingEnabled && !session.DisableCulling)
+                GetEntityStates(session);
+            else
+                GetAllEntityStates(session);
+
+            DebugTools.AssertNull(session.State);
+            session.State = new GameState(
+                session.FromTick,
+                _gameTiming.CurTick,
+                0,
+                session.States,
+                session.PlayerStates,
+                _deletedEntities);
+
+            session.ForceSendReliably = false;
+            return;
+        }
+
+        TryComputeSessionState(session);
+    }
 
     internal bool TryComputeSessionState(PvsSession session)
     {

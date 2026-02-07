@@ -1,5 +1,3 @@
-using System;
-using System.Threading.Tasks;
 using Prometheus;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
@@ -9,6 +7,9 @@ using Robust.Shared.Player;
 using Robust.Shared.Serialization;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Robust.Server.GameStates;
 
@@ -88,8 +89,8 @@ internal sealed partial class PvsSystem
         {
             var state = states[i];
             var changes = state.ComponentChanges.Value;
-            if (changes != null)
-                _componentChangeListPool.Return(changes);
+            if (changes is List<ComponentChange> list)
+                _componentChangeListPool.Return(list);
 
             if (state.NetComponents != null)
             {

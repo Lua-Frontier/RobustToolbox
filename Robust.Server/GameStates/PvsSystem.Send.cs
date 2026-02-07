@@ -47,7 +47,7 @@ internal sealed partial class PvsSystem
 
         try
         {
-            if (data.Session.Channel is not DummyChannel channel)
+            if (data.Session.Channel is { } channel && channel is not DummyChannel)
             {
                 if (!channel.IsConnected)
                     return;

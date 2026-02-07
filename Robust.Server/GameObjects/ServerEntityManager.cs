@@ -216,10 +216,9 @@ namespace Robust.Server.GameObjects
             if (_entityMsgQueueLimit > 0 && _queue.Count >= _entityMsgQueueLimit)
             {
                 _netEntSawmill.Warning(
-                    "Disconnecting client {0} for exceeding MsgEntity queue limit ({1}).",
+                    "Dropping MsgEntity from {0} for exceeding MsgEntity queue limit ({1}).",
                     message.MsgChannel,
                     _entityMsgQueueLimit);
-                message.MsgChannel.Disconnect("Server-side entity message queue overflow");
                 return;
             }
 
@@ -232,12 +231,11 @@ namespace Robust.Server.GameObjects
                 if (msgTick > maxAllowed)
                 {
                     _netEntSawmill.Warning(
-                        "Disconnecting client {0} for MsgEntity future tick. cur={1} msg={2} limit={3}",
+                        "Dropping MsgEntity from {0} for future tick. cur={1} msg={2} limit={3}",
                         message.MsgChannel,
                         curTick,
                         msgTick,
                         _entityMsgMaxFutureTicks);
-                    message.MsgChannel.Disconnect("Invalid entity message tick");
                     return;
                 }
             }

@@ -81,15 +81,11 @@ internal sealed partial class PvsSystem
 
         if (_maxEntityStates > 0 && session.States.Count > _maxEntityStates)
         {
-            if (session.Session.Channel is { } channel && channel is not DummyChannel)
-            {
-                Log.Warning(
-                    "Disconnecting {0} for exceeding net.pvs_max_entity_states. Count={1} Limit={2}",
-                    session.Session,
-                    session.States.Count,
-                    _maxEntityStates);
-                channel.Disconnect($"PVS state overflow ({session.States.Count} > {_maxEntityStates})");
-            }
+            Log.Warning(
+                "Skipping PVS state for {0} due to exceeding net.pvs_max_entity_states. Count={1} Limit={2}",
+                session.Session,
+                session.States.Count,
+                _maxEntityStates);
 
             return false;
         }

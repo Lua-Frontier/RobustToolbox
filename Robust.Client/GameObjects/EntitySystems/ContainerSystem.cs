@@ -116,7 +116,7 @@ namespace Robust.Client.GameObjects
                 if (!component.Containers.TryGetValue(id, out var container))
                 {
                     var type = _serializer.FindSerializedType(typeof(BaseContainer), data.ContainerType);
-                    container = _dynFactory.CreateInstanceUnchecked<BaseContainer>(type!, inject:false);
+                    container = _dynFactory.CreateInstanceUnchecked<BaseContainer>(type!, inject: false);
                     container.Init(this, id, (uid, component));
                     component.Containers.Add(id, container);
                 }
@@ -169,15 +169,15 @@ namespace Robust.Client.GameObjects
                 {
                     var entity = stateEnts[i];
                     var netEnt = stateNetEnts[i];
+
                     if (!entity.IsValid())
                     {
-                        DebugTools.Assert(netEnt.IsValid());
-                        AddExpectedEntity(netEnt, container);
+                        if (netEnt.IsValid())
+                            AddExpectedEntity(netEnt, container);
                         continue;
                     }
 
                     var meta = MetaData(entity);
-                    DebugTools.Assert(meta.NetEntity == netEnt);
 
                     // If an entity is currently in the shadow realm, it means we probably left PVS and are now getting
                     // back into range. We do not want to directly insert this entity, as IF the container and entity

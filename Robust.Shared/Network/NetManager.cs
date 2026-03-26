@@ -140,6 +140,14 @@ namespace Robust.Shared.Network
         private ISawmill _loggerPacket = default!;
         private ISawmill _authLogger = default!;
 
+        // use smile in discord luna or ds :cat_xdd:
+        private readonly Dictionary<IPAddress, int> _decryptFailCounts = new();
+        private const int DecryptFailBanThreshold = 10;
+
+        private bool _clientSerializerComplete;
+        private bool _clientTransferComplete;
+        private bool _clientResetPending;
+
         /// <inheritdoc />
         public int Port => _config.GetCVar(CVars.NetPort);
 
@@ -910,7 +918,21 @@ namespace Robust.Shared.Network
                 return true;
             }
 
-            channel.Encryption?.Decrypt(msg);
+            try
+            { channel.Encryption?.Decrypt(msg); }
+            catch (Exception e)
+            {
+                var remoteEndPoint = msg.SenderConnection.RemoteEndPoint;
+                var remoteIp = remoteEndPoint.Address;
+                _decryptFailCounts.TryGetValue(remoteIp, out var failCount);
+                failCount += 1;
+                _decryptFailCounts[remoteIp] = failCount;
+                _logger.Warning($"{remoteEndPoint}: Failed to decrypt message (fail #{failCount}), disconnecting. Exception: {e.Message}");
+                if (failCount >= DecryptFailBanThreshold)
+                { _authLogger.Warning($"[DECRYPTBAN] {remoteIp} reached {failCount} decryption failures. Consider banning this IP."); }
+                channel.Disconnect("Decryption failure");
+                return true;
+            }
 
             var id = msg.ReadByte();
 

@@ -961,11 +961,11 @@ namespace Robust.Shared.Network
             }
 
             // Attempt to decrypt the message, only logging if we fail to decrypt and we actually have encryption.
-            if (channel.Encryption != null && !channel.Encryption.TryDecrypt(msg))
+            if ((!channel.Encryption?.TryDecrypt(msg)) ?? false)
             {
+                var remoteEndPoint = msg.SenderConnection.RemoteEndPoint;
                 if (IsServer)
                 {
-                    var remoteEndPoint = msg.SenderConnection.RemoteEndPoint;
                     var remoteIp = NormalizeIp(remoteEndPoint.Address);
                     var now = DateTime.UtcNow;
                     var maxTracked = _config.GetCVar(CVars.NetDecryptFailMaxTracked);
@@ -973,13 +973,10 @@ namespace Robust.Shared.Network
                     // Drop silently if tracking limit reached
                     if (_decryptFailCounts.Count >= maxTracked && !_decryptFailCounts.ContainsKey(remoteIp))
                         return true;
-
                     var (failCount, _) = _decryptFailCounts.AddOrUpdate(
                         remoteIp,
                         _ => (1, now),
                         (_, old) => (old.TotalCount + 1, now));
-
-                    // Log only on first failure and at threshold — avoids log I/O DoS
                     if (failCount == 1 && _logPacketIssues)
                         _logger.Debug($"{remoteEndPoint}: Got a packet that fails to decrypt.");
 
@@ -989,9 +986,12 @@ namespace Robust.Shared.Network
                         _authLogger.Warning($"[DECRYPTBAN] {remoteIp} reached {failCount} decryption failures. Consider banning this IP.");
                         if (_config.GetCVar(CVars.NetDecryptFailKick))
                             msg.SenderConnection.Disconnect("Failed to decrypt packet.", false);
+                        return true;
                     }
                 }
-
+                else if (_logPacketIssues)
+                { _logger.Debug($"{remoteEndPoint}: Got a packet that fails to decrypt."); }
+                msg.SenderConnection.Disconnect("Failed to decrypt packet.", false);
                 return true;
             }
 

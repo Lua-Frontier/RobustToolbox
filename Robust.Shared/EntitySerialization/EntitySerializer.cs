@@ -189,7 +189,11 @@ public sealed class EntitySerializer : ISerializationContext,
     {
         if (ent.Comp == null && !EntMan.TryGetComponent(ent.Owner, out ent.Comp))
             return false;
-
+            
+        // QueueDel removes entities at the end of the tick. Serializing one in that window resurrects an entity
+        // which was already logically deleted and may also leave references to children whose metadata is gone.
+        if (EntMan.IsQueuedForDeletion(ent.Owner) || ent.Comp.EntityLifeStage >= EntityLifeStage.Terminating)
+            return false;
 
         bool serializable = ent.Comp.EntityPrototype?.MapSavable != false;
         OnIsSerializeable?.Invoke(ent!, ref serializable);
@@ -1006,6 +1010,14 @@ public sealed class EntitySerializer : ISerializationContext,
                 _log.Error("Encountered an invalid entityUid reference while serializing {Entity}, component: {Component}.",
                     CurrentEntity != null ? EntMan.ToPrettyString(CurrentEntity) : "?", CurrentComponent ?? "?");
 
+            return InvalidNode;
+        }
+
+        if (!IsSerializable(value))
+        {
+            if (Options.MissingEntityBehaviour != MissingEntityBehaviour.Ignore)
+                _log.Error("Encountered a reference to a terminating entity: {Value} while serializing {Entity}, component: {Component}.",
+                    value, CurrentEntity != null ? EntMan.ToPrettyString(CurrentEntity) : "?", CurrentComponent ?? "?");
             return InvalidNode;
         }
 

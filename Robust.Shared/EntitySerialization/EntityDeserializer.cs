@@ -9,6 +9,8 @@ using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
+using Robust.Shared.Physics;
+using Robust.Shared.Physics.Components;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
@@ -49,6 +51,7 @@ public sealed partial class EntityDeserializer :
     [Dependency] private ISerializationManager _seriMan = default!;
     [Dependency] private IComponentFactory _factory = default!;
     [Dependency] private IPrototypeManager _proto = default!;
+    [Dependency] private ITileDefinitionManager _tiles = default!;
     [Dependency] private SharedMapSystem _map = default!;
     [Dependency] private ILogManager _logMan = default!;
     [Dependency] private IDependencyCollection _deps = default!;
@@ -86,7 +89,8 @@ public sealed partial class EntityDeserializer :
         HashSet<string>? MissingComponents,
         bool PostInit,
         bool Paused,
-        bool ToDelete);
+        bool ToDelete,
+        Guid Guid = default);
 
     public readonly LoadResult Result = new();
     public readonly Dictionary<int, string> TileMap = new();
@@ -115,6 +119,15 @@ public sealed partial class EntityDeserializer :
     private readonly EntityQuery<MapGridComponent> _gridQuery;
     private readonly EntityQuery<TransformComponent> _xformQuery;
     private readonly EntityQuery<MetaDataComponent> _metaQuery;
+
+    public event DeserializeComponentDelegate? OnDeserializeComponent;
+    public delegate void DeserializeComponentDelegate(
+        IComponent component,
+        MappingDataNode mapping,
+        ISerializationManager serialization,
+        ISerializationContext context,
+        ref IComponent? result,
+        ref bool handled);
 
     public EntityDeserializer(
         IDependencyCollection deps,
@@ -294,6 +307,14 @@ public sealed partial class EntityDeserializer :
             if (_proto.HasIndex<EntityPrototype>(type))
                 continue;
 
+            const string fallback = "Error";
+            if (type != fallback && _proto.HasIndex<EntityPrototype>(fallback))
+            {
+                _log.Error("Missing prototype {0} → {1}", type, fallback);
+                typeNode.Value = fallback;
+                continue;
+            }
+
             _log.Error("Missing prototype for map: {0}", type);
             fail = true;
         }
@@ -364,7 +385,7 @@ public sealed partial class EntityDeserializer :
                     : !postInit;
 
                 var (comps, missing) = GetComponents(entityNode);
-                var entData = new EntData(yamlId, entityNode, comps, missing, postInit, paused, deletedPrototype);
+                var entData = new EntData(yamlId, entityNode, comps, missing, postInit, paused, deletedPrototype, ReadGuid(entityNode));
                 protoData.Add(entData);
                 YamlEntities.Add(yamlId, entData);
             }
@@ -399,7 +420,7 @@ public sealed partial class EntityDeserializer :
             _proto.TryIndex(protoId, out var proto);
             var protoData = Prototypes.GetOrNew(proto?.ID ?? string.Empty);
             var (comps, missing) = GetComponents(entityNode);
-            var entData = new EntData(yamlId, entityNode, comps, missing, PostInit: !preInit, Paused: preInit, toDelete);
+            var entData = new EntData(yamlId, entityNode, comps, missing, PostInit: !preInit, Paused: preInit, toDelete, ReadGuid(entityNode));
             protoData.Add(entData);
             YamlEntities.Add(yamlId, entData);
         }
@@ -493,6 +514,15 @@ public sealed partial class EntityDeserializer :
             if (migrations.TryGetValue(tileName, out var @new))
                 tileName = @new;
 
+            const string fallback = "Plating";
+            if (!_tiles.TryGetDefinition(tileName, out _) &&
+                tileName != fallback &&
+                _tiles.TryGetDefinition(fallback, out _))
+            {
+                _log.Error("Missing tile {0} → {1}", tileName, fallback);
+                tileName = fallback;
+            }
+
             TileMap.Add(yamlTileId, tileName);
         }
 
@@ -511,7 +541,35 @@ public sealed partial class EntityDeserializer :
 
             foreach (var ent in ents)
             {
-                var entity = EntMan.AllocEntity(proto);
+                EntityUid entity;
+                if (ent.Guid != Guid.Empty)
+                {
+                    var reuse = EntMan.GuIds.PrepareLoad(
+                        ent.Guid,
+                        uid => EntMan.EntityExists(uid),
+                        EntMan.GenerateEntityUid,
+                        out var alreadyLive);
+                    if (alreadyLive)
+                    {
+                        UidMap[ent.YamlId] = reuse;
+                        if (Options.ApplyOntoLiveGuIds)
+                        {
+                            Entities.Add(reuse, ent);
+                            continue;
+                        }
+
+                        _log.Warning($"Duplicate guid {ent.Guid} while loading yaml uid {ent.YamlId} ({proto?.ID}). Keeping {EntMan.ToPrettyString(reuse)}.");
+                        continue;
+                    }
+
+                    entity = EntMan.AllocEntity(proto, reuse);
+                    EntMan.GetComponent<MetaDataComponent>(entity).Guid = ent.Guid;
+                }
+                else
+                {
+                    entity = EntMan.AllocEntity(proto);
+                }
+
                 Result.Entities.Add(entity);
                 UidMap.Add(ent.YamlId, entity);
                 Entities.Add(entity, ent);
@@ -556,6 +614,13 @@ public sealed partial class EntityDeserializer :
         ReadYamlIdList(Data, "nullspace", NullspaceYamlIds);
     }
 
+    private static Guid ReadGuid(MappingDataNode node)
+    {
+        return node.TryGet<ValueDataNode>("pid", out var pidNode) && Guid.TryParse(pidNode.Value, out var id)
+            ? id
+            : Guid.Empty;
+    }
+
     private void ReadYamlIdList(MappingDataNode data, string key, List<int> list)
     {
         var sequence = data.Get<SequenceDataNode>(key);
@@ -590,6 +655,21 @@ public sealed partial class EntityDeserializer :
 
         CurrentReadingEntity = null;
         _log.Debug($"Loaded {Entities.Count} entities in {_stopwatch.Elapsed}");
+    }
+
+    private static bool IsStructuralRootComponent(Type type)
+    {
+        return type == typeof(TransformComponent)
+            || type == typeof(MetaDataComponent)
+            || type == typeof(MapGridComponent)
+            || type == typeof(MapComponent);
+    }
+
+    private static bool IsLiveGridOwnedComponent(Type type)
+    {
+        return type == typeof(FixturesComponent)
+            || type == typeof(PhysicsComponent)
+            || type == typeof(JointComponent);
     }
 
     private void LoadEntity(
@@ -661,10 +741,22 @@ public sealed partial class EntityDeserializer :
             CurrentComponent = name;
 
             var compReg = _factory.GetRegistration(name);
+            if (Options.ApplyOntoLiveGuIds &&
+                (IsStructuralRootComponent(compReg.Type) ||
+                 (_gridQuery.HasComponent(uid) && IsLiveGridOwnedComponent(compReg.Type))))
+            {
+                if (compReg.Type == typeof(MetaDataComponent) &&
+                    data.TryGet<ValueDataNode>("name", out var nameNode) &&
+                    !string.IsNullOrWhiteSpace(nameNode.Value))
+                    EntMan.System<MetaDataSystem>().SetEntityName(uid, nameNode.Value, meta, raiseEvents: false);
+                continue;
+            }
+
             if (!EntMan.TryGetComponent(uid, compReg.Idx, out var existing))
             {
                 // New component not present in the prototype.
-                var newComponent = (IComponent) _seriMan.Read(compReg.Type, data, this)!;
+                var exemplar = OnDeserializeComponent == null ? null : _factory.GetComponent(compReg);
+                var newComponent = DeserializeComponent(compReg.Type, exemplar, data);
 
                 // TODO ECS remove this when everything has been ECSd
                 if (newComponent is ISerializationHooks)
@@ -690,7 +782,7 @@ public sealed partial class EntityDeserializer :
             // Copy directly into the existing object
             // I'm scared turning over this rock will reveal a lot of bugs. So leaving that to a future PR.
             // I.e., creating "temp" here just unnecessarily slows everything down.
-            var temp = (IComponent) _seriMan.Read(compReg.Type, data, this)!;
+            var temp = DeserializeComponent(compReg.Type, existing, data);
             _seriMan.CopyTo(temp, ref existing, this, notNullableOverride: true);
         }
 
@@ -701,6 +793,23 @@ public sealed partial class EntityDeserializer :
             EntMan.DirtyEntity(uid, meta);
             meta.LastComponentRemoved = Timing.CurTick;
         }
+    }
+
+    private IComponent DeserializeComponent(Type componentType, IComponent? exemplar, MappingDataNode data)
+    {
+        if (OnDeserializeComponent == null)
+            return (IComponent) _seriMan.Read(componentType, data, this)!;
+
+        exemplar ??= (IComponent) Activator.CreateInstance(componentType)!;
+        IComponent? result = null;
+        var handled = false;
+        OnDeserializeComponent.Invoke(exemplar, data, _seriMan, this, ref result, ref handled);
+
+        if (!handled)
+            return (IComponent) _seriMan.Read(componentType, data, this)!;
+
+        return result ?? throw new InvalidOperationException(
+            $"Component deserialization hook handled {componentType} without returning a component.");
     }
 
     private void GetRootEntities()
@@ -1031,10 +1140,9 @@ public sealed partial class EntityDeserializer :
                 continue;
 
             DebugTools.Assert(meta.EntityLifeStage == EntityLifeStage.Initialized);
-            if (_mapQuery.HasComp(uid))
-                EntMan.SetLifeStage(meta, EntityLifeStage.MapInitialized);
-            else
-                EntMan.RunMapInit(uid, meta);
+            EntMan.MarkAsMapInitialized(uid, meta);
+            var loaded = new EntityLoadedEvent();
+            EntMan.EventBus.RaiseLocalEvent(uid, ref loaded);
         }
 
         _log.Debug($"Finished flagging mapinit in {_stopwatch.Elapsed}");
@@ -1156,7 +1264,7 @@ public sealed partial class EntityDeserializer :
         IDependencyCollection dependencies,
         ISerializationContext? context)
     {
-        if (node.Value is "invalid")
+        if (node.Value is "invalid" or EntitySerializer.TruncatedReference || EntitySerializer.IsPersistentReference(node.Value))
             return new ValidatedValueNode(node);
 
         if (!int.TryParse(node.Value, out _))
@@ -1201,6 +1309,15 @@ public sealed partial class EntityDeserializer :
             return EntityUid.Invalid;
         }
 
+        if (node.Value == EntitySerializer.TruncatedReference)
+            return Options.TruncatedTarget;
+
+        if (EntitySerializer.IsPersistentReference(node.Value))
+        {
+            var id = Guid.Parse(node.Value.AsSpan(1));
+            return EntMan.GuIds.ResolveReference(id, EntMan.GenerateEntityUid);
+        }
+
         if (int.TryParse(node.Value, out var val) && UidMap.TryGetValue(val, out var entity))
             return entity;
 
@@ -1217,7 +1334,7 @@ public sealed partial class EntityDeserializer :
         IDependencyCollection dependencies,
         ISerializationContext? context)
     {
-        if (node.Value is "invalid")
+        if (node.Value is "invalid" or EntitySerializer.TruncatedReference || EntitySerializer.IsPersistentReference(node.Value))
             return new ValidatedValueNode(node);
 
         if (!int.TryParse(node.Value, out _))
@@ -1239,7 +1356,17 @@ public sealed partial class EntityDeserializer :
         if (EntMan.TryGetNetEntity(uid, out var nent))
             return nent.Value;
 
-        _log.Error($"Failed to get NetEntity entity {EntMan.ToPrettyString(uid)}");
+        var reading = CurrentReadingEntity;
+        var proto = reading?.Node.TryGet<ValueDataNode>("proto", out var protoNode) == true
+            ? protoNode.Value
+            : "?";
+        _log.Error(
+            "Failed to get NetEntity for {Entity} while reading yaml uid {YamlId} proto {Proto} component {Component} value {Value}",
+            EntMan.ToPrettyString(uid),
+            reading?.YamlId.ToString() ?? "?",
+            proto,
+            CurrentComponent ?? "?",
+            node.Value);
         return NetEntity.Invalid;
     }
 

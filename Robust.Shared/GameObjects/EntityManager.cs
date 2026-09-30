@@ -94,6 +94,8 @@ namespace Robust.Shared.GameObjects
         /// <inheritdoc />
         public IEventBus EventBus => EventBusInternal;
 
+        public GuidEntityIndex GuIds { get; } = new();
+
         public event Action<Entity<MetaDataComponent>>? EntityAdded;
         public event Action<Entity<MetaDataComponent>>? EntityInitialized;
         public event Action<Entity<MetaDataComponent>>? EntityDeleted;
@@ -250,7 +252,7 @@ namespace Robust.Shared.GameObjects
         {
             _componentFactory.ComponentsAdded -= OnComponentsAdded;
             ShuttingDown = true;
-            FlushEntities();
+            BeforeEntityFlush?.Invoke();
             _entitySystemManager.Clear();
             EventBusInternal.Dispose();
             EventBusInternal = null!;
@@ -697,6 +699,8 @@ namespace Robust.Shared.GameObjects
             if (transform._children.Count != 0)
                 _sawmill.Error($"Failed to delete all children of entity: {ToPrettyString(uid)}");
 
+            GuIds.Tombstone(uid, metadata);
+
             // Shut down all components.
             foreach (var component in InSafeOrder(_entCompIndex[uid]))
             {
@@ -936,15 +940,32 @@ namespace Robust.Shared.GameObjects
 
         /// <inheritdoc cref="AllocEntity(Robust.Shared.Prototypes.EntityPrototype?,out Robust.Shared.GameObjects.MetaDataComponent)"/>
         internal EntityUid AllocEntity(EntityPrototype? prototype) => AllocEntity(prototype, out _);
+        internal EntityUid AllocEntity(EntityPrototype? prototype, EntityUid uid)
+        {
+            var entity = AllocEntity(out var metadata, uid);
+            metadata._entityPrototype = prototype;
+            Dirty(entity, metadata, metadata);
+            return entity;
+        }
 
         /// <summary>
         ///     Allocates an entity and stores it but does not load components or do initialization.
         /// </summary>
-        private EntityUid AllocEntity(out MetaDataComponent metadata)
+        private EntityUid AllocEntity(out MetaDataComponent metadata, EntityUid? reuse = null)
         {
             ThreadCheck();
 
-            var uid = GenerateEntityUid();
+            EntityUid uid;
+            if (reuse is { } forced)
+            {
+                if (forced.Id >= NextEntityUid)
+                    NextEntityUid = forced.Id + 1;
+                uid = forced;
+            }
+            else
+            {
+                uid = GenerateEntityUid();
+            }
 
 #if DEBUG
             if (EntityExists(uid))
@@ -1084,6 +1105,19 @@ namespace Robust.Shared.GameObjects
             SetLifeStage(meta, EntityLifeStage.MapInitialized);
 
             EventBusInternal.RaiseLocalEvent(entity, MapInitEventInstance);
+        }
+
+        public void MarkAsMapInitialized(EntityUid entity, MetaDataComponent? meta = null)
+        {
+            if (!MetaQuery.Resolve(entity, ref meta))
+                return;
+
+            if (meta.EntityLifeStage >= EntityLifeStage.MapInitialized)
+                return;
+
+            DebugTools.Assert(meta.EntityLifeStage == EntityLifeStage.Initialized,
+                $"Expected entity {ToPrettyString(entity)} to be initialized, was {meta.EntityLifeStage}");
+            SetLifeStage(meta, EntityLifeStage.MapInitialized);
         }
 
         /// <inheritdoc />

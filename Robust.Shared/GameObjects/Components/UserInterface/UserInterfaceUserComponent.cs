@@ -11,7 +11,7 @@ namespace Robust.Shared.GameObjects;
 /// This component is implicitly networked via <see cref="UserInterfaceComponent"/>.
 /// I.e., the other component is authoritative about what UIs are open
 /// </remarks>
-[RegisterComponent]
+[RegisterComponent, UnsavedComponent]
 public sealed partial class UserInterfaceUserComponent : Component
 {
     [DataField]

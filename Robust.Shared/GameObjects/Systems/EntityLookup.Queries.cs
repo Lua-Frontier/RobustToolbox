@@ -26,18 +26,26 @@ public sealed partial class EntityLookupSystem
 
     #region Private
 
-    private void RecursiveAdd(EntityUid uid, ref ValueList<EntityUid> toAdd)
+    private void RecursiveAdd(
+        EntityUid uid,
+        ref ValueList<EntityUid> toAdd,
+        EntityUid containerOwner,
+        string containerId)
     {
         if (!_xformQuery.TryGetComponent(uid, out var xform))
         {
-            Log.Error($"Encountered deleted entity {uid} while performing entity lookup.");
+            Log.Error(
+                "Encountered deleted entity {Entity} while expanding container {Container} on {Owner} during entity lookup.",
+                uid,
+                containerId,
+                ToPrettyString(containerOwner));
             return;
         }
 
         toAdd.Add(uid);
         foreach (var child in xform._children)
         {
-            RecursiveAdd(child, ref toAdd);
+            RecursiveAdd(child, ref toAdd, containerOwner, containerId);
         }
     }
 
@@ -62,7 +70,7 @@ public sealed partial class EntityLookupSystem
             {
                 foreach (var contained in con.ContainedEntities)
                 {
-                    RecursiveAdd(contained, ref toAdd);
+                    RecursiveAdd(contained, ref toAdd, uid, con.ID);
                 }
             }
         }

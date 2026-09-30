@@ -59,7 +59,48 @@ public sealed class DataDefinitionAnalyzerTest
             public sealed class DataDefinitionAttribute : Attribute;
             public sealed class NotYamlSerializableAttribute : Attribute;
         }
+
+        namespace Robust.Shared.Analyzers
+        {
+            public sealed class AutoGenerateComponentPauseAttribute : Attribute;
+            public sealed class AutoPausedFieldAttribute : Attribute;
+        }
+
+        namespace Content.Shared.LunaSave
+        {
+            public sealed class TimeSpanDurationAttribute : Attribute;
+        }
     """;
+
+    [Test]
+    public async Task AbsoluteGameTimeRequiresExplicitSemantics()
+    {
+        const string code = """
+            using System;
+            using Content.Shared.LunaSave;
+            using Robust.Shared.Analyzers;
+            using Robust.Shared.Serialization.Manager.Attributes;
+
+            [DataDefinition, AutoGenerateComponentPause]
+            public sealed partial class TimerData
+            {
+                [DataField]
+                public {|#0:TimeSpan|} BadTimestamp;
+
+                [DataField, AutoPausedField]
+                public TimeSpan GoodTimestamp;
+
+                [DataField, TimeSpanDuration]
+                public TimeSpan Duration;
+            }
+            """;
+
+        await Verifier(
+            code,
+            VerifyCS.Diagnostic(DataDefinitionAnalyzer.AbsoluteGameTimeDataFieldRule)
+                .WithLocation(0)
+                .WithArguments("BadTimestamp", "TimerData"));
+    }
 
     [Test]
     public async Task NoVVReadOnlyTest()

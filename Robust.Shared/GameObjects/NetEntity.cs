@@ -267,5 +267,8 @@ public readonly struct NetEntity : IEquatable<NetEntity>, IComparable<NetEntity>
 
     [ViewVariables] private NetEntity _netId => this;
 
+    [ViewVariables]
+    private Guid _guid => MetaData?.Guid ?? Guid.Empty;
+
     #endregion
 }

@@ -111,7 +111,7 @@ public sealed partial class AudioComponent : Component, IAudioSource
     /// <summary>
     /// Time when the audio was paused so we can offset it later if relevant.
     /// </summary>
-    [DataField, AutoNetworkedField]
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoNetworkedField]
     public TimeSpan? PauseTime;
 
     /// <summary>

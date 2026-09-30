@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -21,6 +22,12 @@ public sealed class DataDefinitionAnalyzer : DiagnosticAnalyzer
     private const string NotYamlSerializableName = "Robust.Shared.Serialization.Manager.Attributes.NotYamlSerializableAttribute";
     private const string DataFieldAttributeName = "DataField";
     private const string ViewVariablesAttributeName = "ViewVariables";
+    private const string AutoPausedFieldName = "Robust.Shared.Analyzers.AutoPausedFieldAttribute";
+    private const string AutoGenerateComponentPauseName =
+        "Robust.Shared.Analyzers.AutoGenerateComponentPauseAttribute";
+    private const string TimeSpanDurationName = "Content.Shared.LunaSave.TimeSpanDurationAttribute";
+    private const string TimeOffsetSerializerName =
+        "Robust.Shared.Serialization.TypeSerializers.Implementations.Custom.TimeOffsetSerializer";
 
     public static readonly DiagnosticDescriptor DataDefinitionPartialRule = new(
         Diagnostics.IdDataDefinitionPartial,
@@ -92,6 +99,16 @@ public sealed class DataDefinitionAnalyzer : DiagnosticAnalyzer
         "Make sure to add a data definition or data record attribute, or inherit a type or add an attribute that implicitly makes its inheritors data definitions or data records."
     );
 
+    public static readonly DiagnosticDescriptor AbsoluteGameTimeDataFieldRule = new(
+        Diagnostics.IdAbsoluteGameTimeDataField,
+        "Serialized game-time timestamp must be relative",
+        "TimeSpan data field {0} in {1} must use AutoPausedField/TimeOffsetSerializer or be marked TimeSpanDuration",
+        "Serialization",
+        DiagnosticSeverity.Error,
+        true,
+        "Absolute game-time timestamps do not survive a process restart."
+    );
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(
         DataDefinitionPartialRule,
         NestedDataDefinitionPartialRule,
@@ -99,7 +116,8 @@ public sealed class DataDefinitionAnalyzer : DiagnosticAnalyzer
         DataFieldRedundantTagRule,
         DataFieldNoVVReadWriteRule,
         DataFieldYamlSerializableRule,
-        DataFieldOutsideDefinition
+        DataFieldOutsideDefinition,
+        AbsoluteGameTimeDataFieldRule
     );
 
     public override void Initialize(AnalysisContext context)
@@ -203,6 +221,13 @@ public sealed class DataDefinitionAnalyzer : DiagnosticAnalyzer
                     fieldTypeSymbol.MetadataName
                 ));
             }
+
+            CheckAbsoluteGameTime(
+                context,
+                fieldSymbol,
+                fieldTypeSymbol,
+                datafieldAttribute,
+                field.Declaration.Type.GetLocation());
         }
     }
 
@@ -269,6 +294,42 @@ public sealed class DataDefinitionAnalyzer : DiagnosticAnalyzer
                 propertyTypeSymbol.Name
             ));
         }
+
+        CheckAbsoluteGameTime(
+            context,
+            propertySymbol,
+            propertyTypeSymbol,
+            datafieldAttribute,
+            property.Type.GetLocation());
+    }
+
+    private static void CheckAbsoluteGameTime(
+        SyntaxNodeAnalysisContext context,
+        ISymbol member,
+        ITypeSymbol type,
+        DataFieldAttribute dataField,
+        Location location)
+    {
+        type = TypeSymbolHelper.GetNullableUnderlyingTypeOrSelf(type);
+        if (type.ToDisplayString() != "System.TimeSpan")
+            return;
+        if (!HasAttribute(member.ContainingType, AutoGenerateComponentPauseName))
+            return;
+
+        if (member.GetAttributes().Any(attr =>
+                attr.AttributeClass?.ToDisplayString() is AutoPausedFieldName or TimeSpanDurationName))
+            return;
+
+        var serializer = dataField.Data?.ConstructorArguments
+            .FirstOrDefault(arg => arg.Kind == TypedConstantKind.Type).Value as INamedTypeSymbol;
+        if (serializer?.ToDisplayString() == TimeOffsetSerializerName)
+            return;
+
+        context.ReportDiagnostic(Diagnostic.Create(
+            AbsoluteGameTimeDataFieldRule,
+            location,
+            member.Name,
+            member.ContainingType.Name));
     }
 
     private static bool HasDataFieldAttribute(ISymbol symbol)

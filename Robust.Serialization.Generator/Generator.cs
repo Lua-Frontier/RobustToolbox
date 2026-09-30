@@ -32,12 +32,16 @@ public class Generator : IIncrementalGenerator
 
     private const string SerializationHooksNamespace = "Robust.Shared.Serialization.ISerializationHooks";
     private const string AutoStateAttributeName = "Robust.Shared.Analyzers.AutoGenerateComponentStateAttribute";
+    private const string AutoPausedFieldAttributeName = "Robust.Shared.Analyzers.AutoPausedFieldAttribute";
+    private const string TimeOffsetSerializerName =
+        "Robust.Shared.Serialization.TypeSerializers.Implementations.Custom.TimeOffsetSerializer";
     private const string ComponentDeltaInterfaceName = "Robust.Shared.GameObjects.IComponentDelta";
     private const string MappingDataNodeName = "Robust.Shared.Serialization.Markdown.Mapping.MappingDataNode";
     private const string SequenceDataNodeName = "Robust.Shared.Serialization.Markdown.Sequence.SequenceDataNode";
     private const string ValueDataNodeName = "Robust.Shared.Serialization.Markdown.Value.ValueDataNode";
     private const string EntityUidName = "Robust.Shared.GameObjects.EntityUid";
     private const string ComponentName = "Robust.Shared.GameObjects.Component";
+    private const string ComponentSaveInterfaceName = "Content.Shared.LunaSave.IComponentSave";
 
     public void Initialize(IncrementalGeneratorInitializationContext initContext)
     {
@@ -57,7 +61,12 @@ public class Generator : IIncrementalGenerator
                         return null;
                     }
 
-                    return GenerateForDataDefinition(type, symbol, isDataRecord, cancellationToken);
+                    return GenerateForDataDefinition(
+                        type,
+                        symbol,
+                        isDataRecord,
+                        context.SemanticModel.Compilation,
+                        cancellationToken);
                 }
             )
             .Where(static type => type != null);
@@ -116,6 +125,7 @@ public class Generator : IIncrementalGenerator
         TypeDeclarationSyntax declaration,
         INamedTypeSymbol type,
         bool isDataRecord,
+        Compilation compilation,
         CancellationToken cancellationToken)
     {
         var builder = new StringBuilder();
@@ -159,6 +169,16 @@ public class Generator : IIncrementalGenerator
         if (nonPartial || definition.InvalidFields)
             return null;
 
+        var componentSaveInterface = compilation.GetTypeByMetadataName(ComponentSaveInterfaceName);
+        var generateComponentSave =
+            componentSaveInterface != null &&
+            TypeSymbolHelper.Inherits(type, ComponentName) &&
+            !type.Interfaces.Any(iface =>
+                SymbolEqualityComparer.Default.Equals(iface, componentSaveInterface));
+        var componentSaveBase = generateComponentSave
+            ? $", global::{ComponentSaveInterfaceName}"
+            : string.Empty;
+
         builder.AppendLine($$"""
             #nullable enable
             using System;
@@ -187,7 +207,7 @@ public class Generator : IIncrementalGenerator
 
             {{containingTypesStart}}
 
-            {{GetPartialTypeDefinitionLine(type)}} : ISerializationGenerated<{{definition.GenericTypeName}}>
+            {{GetPartialTypeDefinitionLine(type)}} : ISerializationGenerated<{{definition.GenericTypeName}}>{{componentSaveBase}}
             {
                 {{GetConstructors(definition)}}
 
@@ -204,12 +224,48 @@ public class Generator : IIncrementalGenerator
                 {{GetValidator(definition)}}
 
                 {{GetFieldDefinitions(definition)}}
+
+                {{GetComponentSaveMethods(definition, generateComponentSave)}}
             }
 
             {{containingTypesEnd}}
             """);
 
         return ($"{symbolName}.g.cs", builder.ToString());
+    }
+
+    private static string GetComponentSaveMethods(DataDefinition definition, bool generate)
+    {
+        if (!generate)
+            return string.Empty;
+
+        var typeName = definition.Type.ToDisplayString();
+        return $$"""
+            public MappingDataNode WriteSave(
+                ISerializationManager serialization,
+                ISerializationContext? context,
+                bool alwaysWrite)
+            {
+                return (MappingDataNode) serialization.WriteValue(
+                    typeof(global::{{typeName}}),
+                    this,
+                    alwaysWrite,
+                    context,
+                    notNullableOverride: true);
+            }
+
+            public IComponent ReadSave(
+                MappingDataNode mapping,
+                ISerializationManager serialization,
+                ISerializationContext? context)
+            {
+                return (IComponent) serialization.Read(
+                    typeof(global::{{typeName}}),
+                    mapping,
+                    context,
+                    notNullableOverride: true)!;
+            }
+            """;
     }
 
     private static void GetDataFields(
@@ -234,8 +290,19 @@ public class Generator : IIncrementalGenerator
             if (!IsDataDefinition(field.ContainingType, out _))
                 invalidFields = true;
 
-            if (attribute.Data?.ConstructorArguments.FirstOrDefault(arg => arg.Kind == TypedConstantKind.Type).Value is
-                INamedTypeSymbol customSerializer)
+            var customSerializer =
+                attribute.Data?.ConstructorArguments.FirstOrDefault(arg => arg.Kind == TypedConstantKind.Type).Value as
+                    INamedTypeSymbol;
+            if (customSerializer == null &&
+                IsTimeSpan(fieldType) &&
+                field.GetAttributes().Any(attr =>
+                    attr.AttributeClass?.ToDisplayString() == AutoPausedFieldAttributeName))
+            {
+                customSerializer = attribute.Data?.AttributeClass?.ContainingAssembly
+                    .GetTypeByMetadataName(TimeOffsetSerializerName);
+            }
+
+            if (customSerializer != null)
             {
                 var serializerType = None;
                 if (ImplementsInterface(customSerializer, TypeCopierInterfaceNamespace))
@@ -298,6 +365,14 @@ public class Generator : IIncrementalGenerator
             if (IsReadOnlyMember(definition, fieldType))
                 invalidFields = true;
         }
+    }
+
+    private static bool IsTimeSpan(ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
+            type = nullable.TypeArguments[0];
+
+        return type.ToDisplayString() == "System.TimeSpan";
     }
 
     private static DataDefinition GetDataDefinition(ITypeSymbol definition, bool isDataRecord)

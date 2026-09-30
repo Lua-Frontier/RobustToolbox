@@ -63,6 +63,13 @@ public sealed partial class EntitySerializer : ISerializationContext,
     public readonly HashSet<int> YamlIds = new();
     public readonly ValueDataNode InvalidNode = new("invalid");
 
+    public const string TruncatedReference = "truncated";
+
+    public static bool IsPersistentReference(string value)
+    {
+        return value.Length > 1 && value[0] == '@' && Guid.TryParse(value.AsSpan(1), out _);
+    }
+
     public string? CurrentComponent { get; private set; }
     public Entity<MetaDataComponent>? CurrentEntity { get; private set; }
     public int CurrentEntityYamlUid { get; private set; }
@@ -162,6 +169,15 @@ public sealed partial class EntitySerializer : ISerializationContext,
     /// </summary>
     public event IsSerializableDelegate? OnIsSerializeable;
     public delegate void IsSerializableDelegate(Entity<MetaDataComponent> ent, ref bool serializable);
+
+    public event SerializeComponentDelegate? OnSerializeComponent;
+    public delegate void SerializeComponentDelegate(
+        IComponent component,
+        ISerializationManager serialization,
+        ISerializationContext context,
+        bool alwaysWrite,
+        ref MappingDataNode? mapping,
+        ref bool handled);
 
     public EntitySerializer(IDependencyCollection dependency, SerializationOptions options)
     {
@@ -503,7 +519,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
 
         var entData = new MappingDataNode
         {
-            {"uid", saveId.ToString(CultureInfo.InvariantCulture)}
+            {"uid", saveId.ToString(CultureInfo.InvariantCulture)},
+            {"pid", EntMan.GuIds.Ensure(uid, meta).ToString("D")}
         };
 
         EntityData[saveId] = (uid, entData);
@@ -637,6 +654,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
                 continue;
 
             var compType = component.GetType();
+            if (Options.IgnoredComponents?.Contains(compType) == true)
+                continue;
 
             var reg = _factory.GetRegistration(compType);
             if (reg.Unsaved)
@@ -652,7 +671,7 @@ public sealed partial class EntitySerializer : ISerializationContext,
                 // instance of this entity, and if we have alwaysWrite: false, then compMapping would not include
                 // the anchored data-field (as false is the default for this bool data field), so the entity would
                 // implicitly be saved as anchored.
-                compMapping = _serialization.WriteValueAs<MappingDataNode>(compType, component, alwaysWrite: true, context: this);
+                compMapping = SerializeComponent(component, compType, alwaysWrite: true);
 
                 // This will not recursively call Except() on the values of the mapping. It will only remove
                 // key-value pairs if both the keys and values are equal.
@@ -662,7 +681,7 @@ public sealed partial class EntitySerializer : ISerializationContext,
             }
             else
             {
-                compMapping = _serialization.WriteValueAs<MappingDataNode>(compType, component, alwaysWrite: false, context: this);
+                compMapping = SerializeComponent(component, compType, alwaysWrite: false);
             }
 
             // Don't need to write it if nothing was written! Note that if this entity has no associated
@@ -674,6 +693,19 @@ public sealed partial class EntitySerializer : ISerializationContext,
             compMapping.InsertAt(0, "type", new ValueDataNode(reg.Name));
             components.Add(compMapping);
         }
+    }
+
+    private MappingDataNode SerializeComponent(IComponent component, Type componentType, bool alwaysWrite)
+    {
+        MappingDataNode? mapping = null;
+        var handled = false;
+        OnSerializeComponent?.Invoke(component, _serialization, this, alwaysWrite, ref mapping, ref handled);
+
+        if (!handled)
+            return _serialization.WriteValueAs<MappingDataNode>(componentType, component, alwaysWrite, this);
+
+        return mapping ?? throw new InvalidOperationException(
+            $"Component serialization hook handled {componentType} without returning a mapping.");
     }
 
     private Dictionary<string, MappingDataNode>? GetProtoCache(EntityPrototype? proto)
@@ -690,7 +722,7 @@ public sealed partial class EntitySerializer : ISerializationContext,
         foreach (var (compName, comp) in proto.Components)
         {
             CurrentComponent = compName;
-            cache.Add(compName, _serialization.WriteValueAs<MappingDataNode>(comp.Component.GetType(), comp.Component, alwaysWrite: true, context: this));
+            cache.Add(compName, SerializeComponent(comp.Component, comp.Component.GetType(), alwaysWrite: true));
         }
 
         CurrentComponent = null;
@@ -985,7 +1017,7 @@ public sealed partial class EntitySerializer : ISerializationContext,
         IDependencyCollection dependencies,
         ISerializationContext? context)
     {
-        if (node.Value == "invalid")
+        if (node.Value == "invalid" || IsPersistentReference(node.Value))
             return new ValidatedValueNode(node);
 
         if (!int.TryParse(node.Value, out _))
@@ -1035,8 +1067,22 @@ public sealed partial class EntitySerializer : ISerializationContext,
 
         if (value == Truncate)
         {
+            if (EntMan.TryGetComponent(value, out MetaDataComponent? truncMeta) &&
+                (truncMeta.EntityPrototype?.MapSavable != false || truncMeta.Guid != Guid.Empty))
+                return new ValueDataNode("@" + EntMan.GuIds.Ensure(value, truncMeta).ToString("D"));
+
+            if (Options.WriteTruncatedReferences)
+                return new ValueDataNode(TruncatedReference);
+
             _log.Error(
                 $"{EntMan.ToPrettyString(CurrentEntity)}:{CurrentComponent} is attempting to serialize references to a truncated entity {EntMan.ToPrettyString(Truncate)}.");
+        }
+        else if (EntMan.TryGetComponent(value, out MetaDataComponent? refMeta))
+        {
+            if (refMeta.EntityPrototype?.MapSavable != false || refMeta.Guid != Guid.Empty)
+                return new ValueDataNode("@" + EntMan.GuIds.Ensure(value, refMeta).ToString("D"));
+
+            return InvalidNode;
         }
 
         switch (Options.MissingEntityBehaviour)

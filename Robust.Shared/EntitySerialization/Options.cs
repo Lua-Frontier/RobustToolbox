@@ -1,4 +1,6 @@
-﻿using System.Numerics;
+using System;
+using System.Collections.Generic;
+using System.Numerics;
 using Robust.Shared.EntitySerialization.Components;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
@@ -40,6 +42,8 @@ public record struct SerializationOptions
     /// If true, the serializer will log an error if it encounters a post map-init entity.
     /// </summary>
     public bool ExpectPreInit;
+    public bool WriteTruncatedReferences;
+    public HashSet<Type>? IgnoredComponents;
 
     public FileCategory Category;
 
@@ -87,6 +91,8 @@ public record struct DeserializationOptions()
     /// If false, maps need to be manually given ids before entities are initialized.
     /// </summary>
     public bool AssignMapIds = true;
+    public EntityUid TruncatedTarget = EntityUid.Invalid;
+    public bool ApplyOntoLiveGuIds;
 }
 
 /// <summary>

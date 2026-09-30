@@ -51,9 +51,23 @@ public abstract partial class SharedMapSystem
 
     internal void RecursiveSetPaused(EntityUid entity, bool paused)
     {
+        if (!TryComp(entity, out TransformComponent? xform) || !TryComp(entity, out MetaDataComponent? _))
+            return;
+
         _meta.SetEntityPaused(entity, paused);
-        foreach (var child in Transform(entity)._children)
+        if (xform._children.Count == 0)
+            return;
+
+        var children = new EntityUid[xform._children.Count];
+        xform._children.CopyTo(children);
+        foreach (var child in children)
         {
+            if (!Exists(child) || !HasComp<TransformComponent>(child))
+            {
+                xform._children.Remove(child);
+                continue;
+            }
+
             RecursiveSetPaused(child, paused);
         }
     }

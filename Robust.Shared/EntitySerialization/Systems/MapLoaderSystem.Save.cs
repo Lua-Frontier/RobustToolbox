@@ -17,6 +17,9 @@ public sealed partial class MapLoaderSystem
     /// <inheritdoc cref="EntitySerializer.OnIsSerializeable"/>
     public event EntitySerializer.IsSerializableDelegate? OnIsSerializable;
 
+    /// <inheritdoc cref="EntitySerializer.OnSerializeComponent"/>
+    public event EntitySerializer.SerializeComponentDelegate? OnSerializeComponent;
+
     /// <summary>
     /// Recursively serialize the given entities and all of their children.
     /// </summary>
@@ -48,6 +51,7 @@ public sealed partial class MapLoaderSystem
 
         var serializer = new EntitySerializer(_dependency, opts);
         serializer.OnIsSerializeable += OnIsSerializable;
+        serializer.OnSerializeComponent += OnSerializeComponent;
         serializer.SerializeEntityRecursive(entities);
         var data = serializer.Write();
         var cat = serializer.GetCategory();
@@ -57,6 +61,34 @@ public sealed partial class MapLoaderSystem
 
         Log.Debug($"Serialized {serializer.EntityData.Count} entities in {_stopwatch.Elapsed}");
         return (data, cat);
+    }
+
+    public EntitySerializer CreateEntitySerializer(
+        HashSet<EntityUid> entities,
+        SerializationOptions? options = null,
+        EntitySerializer.IsSerializableDelegate? extraSerializable = null)
+    {
+        var opts = options ?? SerializationOptions.Default with
+        {
+            ExpectPreInit = entities.Count > 0 && entities.All(x => Exists(x) && LifeStage(x) < EntityLifeStage.MapInitialized)
+        };
+
+        var maps = new HashSet<MapId>();
+        foreach (var uid in entities)
+        {
+            if (Exists(uid))
+                maps.Add(Transform(uid).MapID);
+        }
+
+        var ev = new BeforeSerializationEvent(entities, maps, opts.Category);
+        RaiseLocalEvent(ev);
+
+        var serializer = new EntitySerializer(_dependency, opts);
+        serializer.OnIsSerializeable += OnIsSerializable;
+        serializer.OnSerializeComponent += OnSerializeComponent;
+        if (extraSerializable != null)
+            serializer.OnIsSerializeable += extraSerializable;
+        return serializer;
     }
 
     /// <summary>
@@ -373,6 +405,7 @@ public sealed partial class MapLoaderSystem
         {
             RaiseLocalEvent(ev);
             serializer.OnIsSerializeable += OnIsSerializable;
+            serializer.OnSerializeComponent += OnSerializeComponent;
             serializer.SerializeEntities(entities);
             data = serializer.Write();
             var cat = serializer.GetCategory();

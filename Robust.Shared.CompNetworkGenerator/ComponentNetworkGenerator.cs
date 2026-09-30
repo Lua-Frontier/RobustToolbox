@@ -407,6 +407,30 @@ namespace Robust.Shared.CompNetworkGenerator
                             }
                         }
 
+                        if (type is IArrayTypeSymbol uidArray &&
+                            uidArray.ElementType.ToDisplayString(FullNullableFormat) == GlobalNullableEntityUidName)
+                        {
+                            networkedType = "NetEntity?[]";
+
+                            stateFields.Append($@"
+        public {networkedType} {name} = default!;");
+
+                            getField = $"GetNetEntityArray(component.{name})";
+                            cast = "(NetEntity?[])";
+
+                            handleStateSetters.Append($@"
+            component.{name} = GetEntityArray(state.{name});");
+
+                            deltaHandleFields.Append($@"
+                    component.{name} = GetEntityArray({cast} {fieldHandleValue});");
+
+                            AppendShallowClone(name);
+
+                            deltaApply.Add($"fullState.{name} = {name};");
+
+                            break;
+                        }
+
                         networkedType = $"{typeDisplayStr}";
 
                         stateFields.Append($@"

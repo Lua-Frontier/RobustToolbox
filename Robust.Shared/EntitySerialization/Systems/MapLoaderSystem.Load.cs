@@ -18,6 +18,25 @@ namespace Robust.Shared.EntitySerialization.Systems;
 // file
 public sealed partial class MapLoaderSystem
 {
+    /// <inheritdoc cref="EntityDeserializer.OnDeserializeComponent"/>
+    public event EntityDeserializer.DeserializeComponentDelegate? OnDeserializeComponent;
+
+    public EntityDeserializer CreateEntityDeserializer(
+        MappingDataNode data,
+        DeserializationOptions options,
+        Dictionary<string, string>? renamedPrototypes = null,
+        HashSet<string>? deletedPrototypes = null)
+    {
+        var deserializer = new EntityDeserializer(
+            _dependency,
+            data,
+            options,
+            renamedPrototypes,
+            deletedPrototypes);
+        deserializer.OnDeserializeComponent += OnDeserializeComponent;
+        return deserializer;
+    }
+
     /// <summary>
     ///     Tries to load entities from a YAML file. Whenever possible, you should try to use <see cref="TryLoadMap"/>,
     ///     <see cref="TryLoadGrid"/>, or <see cref="TryLoadEntity"/> instead.
@@ -142,8 +161,7 @@ public sealed partial class MapLoaderSystem
         // Using a local deserializer instead of a cached value, both to ensure that we don't accidentally carry over
         // data from a previous serializations, and because some entities cause other maps/grids to be loaded during
         // mapinit.
-        var deserializer = new EntityDeserializer(
-            _dependency,
+        var deserializer = CreateEntityDeserializer(
             data,
             opts.DeserializationOptions,
             ev.RenamedPrototypes,

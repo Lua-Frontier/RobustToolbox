@@ -150,6 +150,9 @@ namespace Robust.Shared.GameObjects
         [ViewVariables, Access(typeof(EntityManager), Other = AccessPermissions.ReadExecute)]
         public EntityLifeStage EntityLifeStage { get; internal set; }
 
+        [ViewVariables]
+        public Guid Guid;
+
         [ViewVariables(VVAccess.ReadOnly)]
         public MetaDataFlags Flags
         {

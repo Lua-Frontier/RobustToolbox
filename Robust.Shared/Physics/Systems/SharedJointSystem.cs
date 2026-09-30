@@ -323,6 +323,13 @@ public abstract partial class SharedJointSystem : EntitySystem
             return (WeldJoint) weldJoint;
         }
 
+        if (id != null &&
+            _jointsQuery.TryComp(bodyB, out jointComponent) &&
+            jointComponent.Joints.TryGetValue(id, out weldJoint))
+        {
+            return (WeldJoint) weldJoint;
+        }
+
         var joint = new WeldJoint(bodyA, bodyB);
         id ??= GetJointId(joint);
         joint.ID = id;

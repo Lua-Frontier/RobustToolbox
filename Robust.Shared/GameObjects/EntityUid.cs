@@ -216,6 +216,9 @@ namespace Robust.Shared.GameObjects
 
         [ViewVariables]
         private NetEntity _netId => IoCManager.Resolve<IEntityManager>().GetNetEntity(this);
+
+        [ViewVariables]
+        private Guid _guid => MetaData?.Guid ?? Guid.Empty;
         #endregion
     }
 }

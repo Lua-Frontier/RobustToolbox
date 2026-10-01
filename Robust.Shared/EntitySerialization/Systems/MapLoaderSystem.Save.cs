@@ -31,11 +31,8 @@ public sealed partial class MapLoaderSystem
         HashSet<EntityUid> entities,
         SerializationOptions? options = null)
     {
-        _stopwatch.Restart();
         if (!entities.All(Exists))
             throw new Exception($"Cannot serialize deleted entities");
-
-        Log.Info($"Serializing entities: {string.Join(", ", entities.Select(x => ToPrettyString(x).ToString()))}");
 
         var maps = entities.Select(x => Transform(x).MapID).ToHashSet();
 
@@ -59,7 +56,6 @@ public sealed partial class MapLoaderSystem
         var ev2 = new AfterSerializationEvent(entities, data, cat);
         RaiseLocalEvent(ev2);
 
-        Log.Debug($"Serialized {serializer.EntityData.Count} entities in {_stopwatch.Elapsed}");
         return (data, cat);
     }
 

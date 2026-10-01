@@ -113,6 +113,7 @@ public sealed partial class EntityDeserializer :
     public readonly List<EntityUid> SortedEntities = new();
 
     private readonly Dictionary<string, MappingDataNode> _components = new();
+    private readonly Dictionary<string, int> _missingComponents = new();
     public EntData? CurrentReadingEntity;
     public string? CurrentComponent;
     private readonly EntityQuery<MapComponent> _mapQuery;
@@ -185,6 +186,7 @@ public sealed partial class EntityDeserializer :
             return false;
 
         ReadEntities();
+        LogMissingComponents();
         ReadTileMap();
         ReadMapsAndGrids();
         return true;
@@ -478,6 +480,14 @@ public sealed partial class EntityDeserializer :
             {
                 var value = ((ValueDataNode) compData["type"]).Value;
                 compData.Remove("type");
+
+                if (!_factory.TryGetRegistration(value, out _))
+                {
+                    if (!_factory.IsIgnored(value))
+                        _missingComponents[value] = _missingComponents.GetValueOrDefault(value) + 1;
+                    continue;
+                }
+
                 dict.Add(value, compData);
             }
         }
@@ -494,6 +504,14 @@ public sealed partial class EntityDeserializer :
         node.Remove("components");
         node.Remove("missingComponents");
         return (dict, missing);
+    }
+
+    private void LogMissingComponents()
+    {
+        foreach (var (name, count) in _missingComponents)
+        {
+            _log.Error("Missing component {0} → removed from {1} entities", name, count);
+        }
     }
 
     private void ReadTileMap()
@@ -549,21 +567,24 @@ public sealed partial class EntityDeserializer :
                         uid => EntMan.EntityExists(uid),
                         EntMan.GenerateEntityUid,
                         out var alreadyLive);
-                    if (alreadyLive)
+                    if (alreadyLive && Options.ApplyOntoLiveGuIds)
                     {
                         UidMap[ent.YamlId] = reuse;
-                        if (Options.ApplyOntoLiveGuIds)
-                        {
-                            Entities.Add(reuse, ent);
-                            continue;
-                        }
-
-                        _log.Warning($"Duplicate guid {ent.Guid} while loading yaml uid {ent.YamlId} ({proto?.ID}). Keeping {EntMan.ToPrettyString(reuse)}.");
+                        Entities.Add(reuse, ent);
                         continue;
                     }
 
-                    entity = EntMan.AllocEntity(proto, reuse);
-                    EntMan.GetComponent<MetaDataComponent>(entity).Guid = ent.Guid;
+                    if (alreadyLive)
+                    {
+                        entity = EntMan.AllocEntity(proto);
+                        var meta = EntMan.GetComponent<MetaDataComponent>(entity);
+                        EntMan.GuIds.Adopt(entity, meta, Guid.NewGuid());
+                    }
+                    else
+                    {
+                        entity = EntMan.AllocEntity(proto, reuse);
+                        EntMan.GetComponent<MetaDataComponent>(entity).Guid = ent.Guid;
+                    }
                 }
                 else
                 {
@@ -1399,6 +1420,17 @@ public sealed partial class EntityDeserializer :
         ISerializationContext? ctx,
         ISerializationManager.InstantiationDelegate<MapId>? instanceProvider)
     {
+        if (EntitySerializer.IsPersistentReference(node.Value))
+        {
+            var id = Guid.Parse(node.Value.AsSpan(1));
+            var uid = EntMan.GuIds.ResolveReference(id, EntMan.GenerateEntityUid);
+            if (EntMan.TryGetComponent(uid, out MapComponent? mapComp))
+                return mapComp.MapId;
+            if (EntMan.TryGetComponent(uid, out TransformComponent? xform))
+                return xform.MapID;
+            return MapId.Nullspace;
+        }
+
         if (!Options.AssignMapIds || Result.Version < 7)
         {
             _log.Error("Cannot deserialize map ids without pre-allocated ids");

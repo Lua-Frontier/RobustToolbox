@@ -263,10 +263,9 @@ public abstract partial class SharedPhysicsSystem
         // Broadphase has already done the faster check for collision mask / layers
         // so no point duplicating
 
-        DebugTools.Assert(!fixtureA.Contacts.ContainsKey(fixtureB),
-            $"{ToPrettyString(entB)} fixture {fixtureBId} was already in contact with {ToPrettyString(entA)} fixture {fixtureAId}");
-        DebugTools.Assert(!fixtureB.Contacts.ContainsKey(fixtureA),
-            $"{ToPrettyString(entA)} fixture {fixtureAId} was already in contact with {ToPrettyString(entB)} fixture {fixtureBId}");
+        if (fixtureA.Contacts.ContainsKey(fixtureB) || fixtureB.Contacts.ContainsKey(fixtureA))
+            return;
+
         var xformA = entA.Comp2;
         var xformB = entB.Comp2;
 
@@ -287,16 +286,20 @@ public abstract partial class SharedPhysicsSystem
         // Insert into world
         _activeContacts.AddLast(contact.MapNode);
 
-        // Connect to body A
-        DebugTools.Assert(!fixA.Contacts.ContainsKey(fixB),
-            $"{ToPrettyString(contact.EntityB)} fixture {contact.FixtureBId} was already added to contacts of {ToPrettyString(contact.EntityA)} fixture {contact.FixtureAId}");
-        fixA.Contacts.Add(fixB, contact);
-        bodA.Contacts.AddLast(contact.BodyANode);
+        var addedA = fixA.Contacts.TryAdd(fixB, contact);
+        var addedB = addedA && fixB.Contacts.TryAdd(fixA, contact);
+        if (!addedA || !addedB)
+        {
+            _activeContacts.Remove(contact.MapNode);
+            if (addedA)
+                fixA.Contacts.Remove(fixB);
 
-        // Connect to body B
-        DebugTools.Assert(!fixB.Contacts.ContainsKey(fixA),
-            $"{ToPrettyString(contact.EntityA)} fixture {contact.FixtureAId} was already added to contacts of {ToPrettyString(contact.EntityB)} fixture {contact.FixtureBId}");
-        fixB.Contacts.Add(fixA, contact);
+            contact.Flags = ContactFlags.Deleted;
+            _contactPool.Return(contact);
+            return;
+        }
+
+        bodA.Contacts.AddLast(contact.BodyANode);
         bodB.Contacts.AddLast(contact.BodyBNode);
 
         // If it's a spawned static ent then need to wake any contacting entities.

@@ -227,7 +227,6 @@ public sealed partial class PhysicsComponent : Component, IComponentDelta
          Other = AccessPermissions.Read)]
     public float AngularDamping = 0.2f;
 
-    // TODO: Datafield
     /// <summary>
     ///     Current linear velocity of the entity in meters per second.
     /// </summary>
@@ -236,14 +235,14 @@ public sealed partial class PhysicsComponent : Component, IComponentDelta
     ///     entity's parents are all stationary, this is the rate of change of this entity's world position (not
     ///     local position).
     /// </remarks>
-    [ViewVariables(VVAccess.ReadWrite), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
+    [DataField, ViewVariables(VVAccess.ReadWrite), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
         Other = AccessPermissions.ReadExecute)]
     public Vector2 LinearVelocity;
 
     /// <summary>
     ///     Current angular velocity of the entity in radians per sec.
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
+    [DataField, ViewVariables(VVAccess.ReadWrite), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.ReadExecute)]
     public float AngularVelocity;
 

@@ -1600,7 +1600,7 @@ public abstract partial class SharedTransformSystem
 
         if (!TryGetMapOrGridCoordinates(uid, out var coordinates, xform))
         {
-            if (!_mapQuery.HasComp(uid))
+            if (!_mapQuery.HasComp(uid) && !TerminatingOrDeleted(xform.ParentUid))
                 Log.Warning($"Failed to attach entity to map or grid. Entity: ({ToPrettyString(uid)}). Trace: {Environment.StackTrace}");
 
             DetachEntity(uid, xform);

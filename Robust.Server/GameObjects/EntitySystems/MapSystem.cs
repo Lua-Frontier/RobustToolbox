@@ -56,7 +56,7 @@ namespace Robust.Server.GameObjects
                 var query = AllEntityQuery<MapGridComponent>();
                 while (query.MoveNext(out var uid, out var grid))
                 {
-                    if (!GridEmpty((uid, grid)))
+                    if (HasComp<KeepEmptyGridComponent>(uid) || !GridEmpty((uid, grid)))
                         continue;
                     toDelete.Add(uid);
                 }
@@ -75,7 +75,8 @@ namespace Robust.Server.GameObjects
 
         private void HandleGridEmpty(EntityUid uid, MapGridComponent component, EmptyGridEvent args)
         {
-            if (!_deleteEmptyGrids || TerminatingOrDeleted(uid) || HasComp<MapComponent>(uid))
+            if (!_deleteEmptyGrids || TerminatingOrDeleted(uid) || HasComp<MapComponent>(uid) ||
+                HasComp<KeepEmptyGridComponent>(uid))
                 return;
 
             Del(args.GridId);

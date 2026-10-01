@@ -18,6 +18,15 @@ public sealed class GuidEntityIndex
         return meta.Guid;
     }
 
+    public bool TryGetLive(Guid id, out EntityUid uid)
+    {
+        if (_uidById.TryGetValue(id, out uid) && !_tombstones.Contains(id))
+            return true;
+
+        uid = default;
+        return false;
+    }
+
     public EntityUid ResolveReference(Guid id, Func<EntityUid> reserve)
     {
         if (_uidById.TryGetValue(id, out var uid))

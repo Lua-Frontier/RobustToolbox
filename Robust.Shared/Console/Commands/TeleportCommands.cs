@@ -98,7 +98,7 @@ public sealed partial class TeleportToCommand : LocalizedEntityCommands
 
         var target = args[0];
 
-        if (!TryGetTransformFromUidOrUsername(target, shell, out var targetUid, out _))
+        if (!TryGetTransformFromUidOrUsername(target, shell, out var targetUid, out _, allowMap: true))
             return;
 
         var targetCoords = new EntityCoordinates(targetUid.Value, Vector2.Zero);
@@ -124,7 +124,7 @@ public sealed partial class TeleportToCommand : LocalizedEntityCommands
         }
         else
         {
-            foreach (var victim in args)
+            foreach (var victim in args.AsSpan(1))
             {
                 if (!TryGetTransformFromUidOrUsername(victim, shell, out var uid, out var victimTransform))
                     continue;
@@ -148,14 +148,27 @@ public sealed partial class TeleportToCommand : LocalizedEntityCommands
         string str,
         IConsoleShell shell,
         [NotNullWhen(true)] out EntityUid? victimUid,
-        [NotNullWhen(true)] out TransformComponent? transform)
+        [NotNullWhen(true)] out TransformComponent? transform,
+        bool allowMap = false)
     {
         if (NetEntity.TryParse(str, out var uidNet)
             && _entities.TryGetEntity(uidNet, out var uid)
             && _entities.TryGetComponent(uid, out transform)
-            && !_entities.HasComponent<MapComponent>(uid))
+            && (allowMap || !_entities.HasComponent<MapComponent>(uid)))
         {
             victimUid = uid;
+            return true;
+        }
+
+        if (TryParseGuid(str, out var guid)
+            && _entities is EntityManager entMan
+            && entMan.GuIds.TryGetLive(guid, out var guidUid)
+            && _entities.TryGetComponent(guidUid, out MetaDataComponent? meta)
+            && meta.Guid == guid
+            && _entities.TryGetComponent(guidUid, out transform)
+            && (allowMap || !_entities.HasComponent<MapComponent>(guidUid)))
+        {
+            victimUid = guidUid;
             return true;
         }
 
@@ -171,6 +184,13 @@ public sealed partial class TeleportToCommand : LocalizedEntityCommands
         transform = null;
         victimUid = default;
         return false;
+    }
+
+    private static bool TryParseGuid(string str, out Guid guid)
+    {
+        var colon = str.LastIndexOf(':');
+        var span = colon >= 0 ? str.AsSpan(colon + 1) : str.AsSpan();
+        return Guid.TryParse(span, out guid) && guid != Guid.Empty;
     }
 
     public override CompletionResult GetCompletion(IConsoleShell shell, string[] args)

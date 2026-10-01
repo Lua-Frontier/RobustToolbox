@@ -549,21 +549,24 @@ public sealed partial class EntityDeserializer :
                         uid => EntMan.EntityExists(uid),
                         EntMan.GenerateEntityUid,
                         out var alreadyLive);
-                    if (alreadyLive)
+                    if (alreadyLive && Options.ApplyOntoLiveGuIds)
                     {
                         UidMap[ent.YamlId] = reuse;
-                        if (Options.ApplyOntoLiveGuIds)
-                        {
-                            Entities.Add(reuse, ent);
-                            continue;
-                        }
-
-                        _log.Warning($"Duplicate guid {ent.Guid} while loading yaml uid {ent.YamlId} ({proto?.ID}). Keeping {EntMan.ToPrettyString(reuse)}.");
+                        Entities.Add(reuse, ent);
                         continue;
                     }
 
-                    entity = EntMan.AllocEntity(proto, reuse);
-                    EntMan.GetComponent<MetaDataComponent>(entity).Guid = ent.Guid;
+                    if (alreadyLive)
+                    {
+                        entity = EntMan.AllocEntity(proto);
+                        var meta = EntMan.GetComponent<MetaDataComponent>(entity);
+                        EntMan.GuIds.Adopt(entity, meta, Guid.NewGuid());
+                    }
+                    else
+                    {
+                        entity = EntMan.AllocEntity(proto, reuse);
+                        EntMan.GetComponent<MetaDataComponent>(entity).Guid = ent.Guid;
+                    }
                 }
                 else
                 {
@@ -1399,6 +1402,17 @@ public sealed partial class EntityDeserializer :
         ISerializationContext? ctx,
         ISerializationManager.InstantiationDelegate<MapId>? instanceProvider)
     {
+        if (EntitySerializer.IsPersistentReference(node.Value))
+        {
+            var id = Guid.Parse(node.Value.AsSpan(1));
+            var uid = EntMan.GuIds.ResolveReference(id, EntMan.GenerateEntityUid);
+            if (EntMan.TryGetComponent(uid, out MapComponent? mapComp))
+                return mapComp.MapId;
+            if (EntMan.TryGetComponent(uid, out TransformComponent? xform))
+                return xform.MapID;
+            return MapId.Nullspace;
+        }
+
         if (!Options.AssignMapIds || Result.Version < 7)
         {
             _log.Error("Cannot deserialize map ids without pre-allocated ids");

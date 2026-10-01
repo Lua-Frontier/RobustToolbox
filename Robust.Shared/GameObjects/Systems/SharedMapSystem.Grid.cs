@@ -606,7 +606,6 @@ public abstract partial class SharedMapSystem
 
     private void OnGridRemove(EntityUid uid, MapGridComponent component, ComponentShutdown args)
     {
-        Log.Info($"Removing grid {ToPrettyString(uid)}");
         if (TryComp(uid, out TransformComponent? xform) && xform.MapUid != null)
         {
             RemoveGrid(uid, component, xform.MapUid.Value);
@@ -940,7 +939,7 @@ public abstract partial class SharedMapSystem
                 if (shapeChanged)
                     modified.Add(chunk);
 
-                tileChanges.Add(new TileChangedEntry(tile, oldTile, offset, gridIndices));
+                tileChanges.Add(new TileChangedEntry(tile, oldTile, chunkIndex, gridIndices));
             }
         }
 

@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Contracts;
 using Robust.Shared.GameStates;
 using Robust.Shared.Map;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics.Dynamics;
 using Robust.Shared.Utility;
@@ -238,10 +239,30 @@ public abstract partial class SharedMapSystem
     ///     Creates a new map, automatically assigning a map id.
     /// </summary>
     public EntityUid CreateMap(out MapId mapId, bool runMapInit = true)
+        => CreateMap(out mapId, Guid.Empty, runMapInit);
+
+    public EntityUid CreateMap(out MapId mapId, Guid persistentId, bool runMapInit = true)
     {
+        var mgr = (EntityManager) EntityManager;
+        EntityUid? reuse = null;
+        if (persistentId != Guid.Empty)
+        {
+            var reserved = mgr.GuIds.PrepareLoad(
+                persistentId,
+                mgr.EntityExists,
+                mgr.GenerateEntityUid,
+                out var alreadyLive);
+            if (alreadyLive && TryComp<MapComponent>(reserved, out var existing) && existing.MapId != MapId.Nullspace)
+            {
+                mapId = existing.MapId;
+                return reserved;
+            }
+
+            reuse = reserved;
+        }
+
         mapId = TakeNextMapId();
-        var uid = CreateMap(mapId, runMapInit);
-        return uid;
+        return CreateMap(mapId, runMapInit, reuse, persistentId);
     }
 
     /// <inheritdoc cref="CreateMap(out Robust.Shared.Map.MapId,bool)"/>
@@ -252,6 +273,9 @@ public abstract partial class SharedMapSystem
     /// </summary>
     /// <exception cref="ArgumentException">Throws if an invalid or already existing map id is provided.</exception>
     public EntityUid CreateMap(MapId mapId, bool runMapInit = true)
+        => CreateMap(mapId, runMapInit, null, Guid.Empty);
+
+    private EntityUid CreateMap(MapId mapId, bool runMapInit, EntityUid? reuse, Guid persistentId)
     {
         if (Maps.ContainsKey(mapId))
             throw new ArgumentException($"Map with id {mapId} already exists");
@@ -268,7 +292,7 @@ public abstract partial class SharedMapSystem
         if (UsedIds.Contains(mapId))
             Log.Warning($"Re-using MapId: {mapId}");
 
-        var (uid, map, meta) = CreateUninitializedMap();
+        var (uid, map, meta) = CreateUninitializedMap(reuse, persistentId);
         DebugTools.AssertEqual(map.MapId, MapId.Nullspace);
         AssignMapId((uid, map), mapId);
 
@@ -286,8 +310,27 @@ public abstract partial class SharedMapSystem
     }
 
     public Entity<MapComponent, MetaDataComponent> CreateUninitializedMap()
+        => CreateUninitializedMap(null, Guid.Empty);
+
+    private Entity<MapComponent, MetaDataComponent> CreateUninitializedMap(EntityUid? reuse, Guid persistentId)
     {
-        var uid = EntityManager.CreateEntityUninitialized(null, out var meta);
+        var mgr = (EntityManager) EntityManager;
+        EntityUid uid;
+        MetaDataComponent meta;
+        if (reuse is { } forced)
+        {
+            uid = mgr.AllocEntity((EntityPrototype?) null, forced);
+            meta = MetaData(uid);
+            if (persistentId != Guid.Empty)
+                meta.Guid = persistentId;
+        }
+        else
+        {
+            uid = EntityManager.CreateEntityUninitialized(null, out meta);
+            if (persistentId != Guid.Empty)
+                mgr.GuIds.Adopt(uid, meta, persistentId);
+        }
+
         _meta.SetEntityName(uid, $"Map Entity", meta);
         return (uid, AddComp<MapComponent>(uid), meta);
     }

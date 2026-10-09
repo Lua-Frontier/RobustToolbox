@@ -95,6 +95,8 @@ public sealed partial class EntityDeserializer :
     public readonly LoadResult Result = new();
     public readonly Dictionary<int, string> TileMap = new();
     public readonly Dictionary<int, EntityUid> UidMap = new();
+    /// <summary>Local ids of entities moved out of this document, retained as stable references.</summary>
+    public readonly Dictionary<int, Guid> PersistentUidAliases = new();
     public readonly Dictionary<int, MapId> AllocatedMapIds = new();
     public readonly List<int> MapYamlIds = new();
     public readonly List<int> GridYamlIds = new();
@@ -199,6 +201,8 @@ public sealed partial class EntityDeserializer :
     {
         // Alloc entities, and populate the yaml uid -> EntityUid maps
         AllocateEntities();
+        foreach (var (local, persistent) in PersistentUidAliases)
+            UidMap.Add(local, EntMan.GuIds.ResolveReference(persistent, EntMan.GenerateEntityUid));
 
         // Assign a map id to each map entity. This is required to de-serialize map coordinates & map ids
         if (Options.AssignMapIds)

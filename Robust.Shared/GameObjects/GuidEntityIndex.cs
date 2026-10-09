@@ -6,6 +6,7 @@ namespace Robust.Shared.GameObjects;
 public sealed class GuidEntityIndex
 {
     private readonly Dictionary<Guid, EntityUid> _uidById = new();
+    private readonly Dictionary<EntityUid, Guid> _idByUid = new();
     private readonly HashSet<Guid> _tombstones = new();
 
     public Guid Ensure(EntityUid uid, MetaDataComponent meta)
@@ -14,9 +15,13 @@ public sealed class GuidEntityIndex
             meta.Guid = Guid.NewGuid();
 
         _uidById[meta.Guid] = uid;
+        _idByUid[uid] = meta.Guid;
         _tombstones.Remove(meta.Guid);
         return meta.Guid;
     }
+
+    public bool TryGetReference(EntityUid uid, out Guid id)
+        => _idByUid.TryGetValue(uid, out id);
 
     public bool TryGetLive(Guid id, out EntityUid uid)
     {
@@ -34,6 +39,7 @@ public sealed class GuidEntityIndex
 
         uid = reserve();
         _uidById[id] = uid;
+        _idByUid[uid] = id;
         return uid;
     }
 
@@ -54,6 +60,7 @@ public sealed class GuidEntityIndex
 
         uid = reserve();
         _uidById[id] = uid;
+        _idByUid[uid] = id;
         _tombstones.Remove(id);
         return uid;
     }
@@ -62,6 +69,7 @@ public sealed class GuidEntityIndex
     {
         meta.Guid = id;
         _uidById[id] = uid;
+        _idByUid[uid] = id;
         _tombstones.Remove(id);
     }
 
@@ -71,6 +79,7 @@ public sealed class GuidEntityIndex
             return;
 
         _uidById[meta.Guid] = uid;
+        _idByUid[uid] = meta.Guid;
         _tombstones.Add(meta.Guid);
     }
 }

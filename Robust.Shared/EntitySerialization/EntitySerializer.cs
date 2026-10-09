@@ -62,6 +62,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
     public readonly Dictionary<EntityUid, int> YamlUidMap = new();
     public readonly HashSet<int> YamlIds = new();
     public readonly ValueDataNode InvalidNode = new("invalid");
+    /// <summary>Use stable references in documents that will be merged into another entity document.</summary>
+    public bool UsePersistentEntityReferences;
 
     public const string TruncatedReference = "truncated";
 
@@ -1033,6 +1035,9 @@ public sealed partial class EntitySerializer : ISerializationContext,
         bool alwaysWrite = false,
         ISerializationContext? context = null)
     {
+        if (UsePersistentEntityReferences && !WritingReadingPrototypes && value != EntityUid.Invalid &&
+            EntMan.TryGetComponent(value, out MetaDataComponent? persistentMeta))
+            return new ValueDataNode("@" + EntMan.GuIds.Ensure(value, persistentMeta).ToString("D"));
         if (YamlUidMap.TryGetValue(value, out var yamlId))
             return new ValueDataNode(yamlId.ToString(CultureInfo.InvariantCulture));
 
@@ -1084,6 +1089,9 @@ public sealed partial class EntitySerializer : ISerializationContext,
 
             return InvalidNode;
         }
+
+        if (EntMan.GuIds.TryGetReference(value, out var referenceGuid))
+            return new ValueDataNode("@" + referenceGuid.ToString("D"));
 
         switch (Options.MissingEntityBehaviour)
         {

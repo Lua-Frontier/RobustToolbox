@@ -18,6 +18,7 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     [Dependency] private IConsoleHost _console = default!;
 
     private readonly HashSet<EntityUid> _hasOverride = new();
+    private readonly List<EntityUid> _invalidOverrides = new();
 
     internal HashSet<EntityUid> GlobalOverride = new();
     internal HashSet<EntityUid> ForceSend = new();
@@ -28,6 +29,7 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     {
         base.Initialize();
         EntityManager.EntityDeleted += OnDeleted;
+        EntityManager.BeforeEntityTerminating += OnTerminating;
         _player.PlayerStatusChanged += OnPlayerStatusChanged;
         SubscribeLocalEvent<MapRemovedEvent>(OnMapRemoved);
         SubscribeLocalEvent<MapCreatedEvent>(OnMapCreated);
@@ -104,12 +106,33 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     {
         base.Shutdown();
         EntityManager.EntityDeleted -= OnDeleted;
+        EntityManager.BeforeEntityTerminating -= OnTerminating;
         _player.PlayerStatusChanged -= OnPlayerStatusChanged;
     }
 
     private void OnDeleted(Entity<MetaDataComponent> entity)
     {
         Clear(entity);
+    }
+
+    private void OnTerminating(ref EntityTerminatingEvent ev)
+    {
+        Clear(ev.Entity);
+    }
+
+    private bool CanOverride(EntityUid uid) =>
+        TryComp<TransformComponent>(uid, out _) && TryComp<MetaDataComponent>(uid, out var meta) &&
+        meta.EntityLifeStage < EntityLifeStage.Terminating;
+
+    internal void PruneInvalidOverrides()
+    {
+        _invalidOverrides.Clear();
+        foreach (var uid in _hasOverride)
+            if (!CanOverride(uid))
+                _invalidOverrides.Add(uid);
+        foreach (var uid in _invalidOverrides)
+            Clear(uid);
+        _invalidOverrides.Clear();
     }
 
     private void Clear(EntityUid uid)
@@ -138,6 +161,9 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </summary>
     public override void AddGlobalOverride(EntityUid uid)
     {
+        if (!CanOverride(uid))
+            return;
+
         base.AddGlobalOverride(uid);
 
         if (GlobalOverride.Add(uid))
@@ -166,6 +192,9 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </remarks>
     public void AddForceSend(EntityUid uid)
     {
+        if (!CanOverride(uid))
+            return;
+
         if (ForceSend.Add(uid))
             _hasOverride.Add(uid);
     }
@@ -187,6 +216,9 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </remarks>
     public void AddForceSend(EntityUid uid, ICommonSession session)
     {
+        if (!CanOverride(uid))
+            return;
+
         if (SessionForceSend.GetOrNew(session).Add(uid))
             _hasOverride.Add(uid);
     }
@@ -213,6 +245,9 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </summary>
     public override void AddSessionOverride(EntityUid uid, ICommonSession session)
     {
+        if (!CanOverride(uid))
+            return;
+
         base.AddSessionOverride(uid, session);
 
         if (SessionOverrides.GetOrNew(session).Add(uid))
@@ -243,6 +278,9 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </summary>
     public override void AddSessionOverrides(EntityUid uid, Filter filter)
     {
+        if (!CanOverride(uid))
+            return;
+
         _hasOverride.Add(uid);
         base.AddSessionOverrides(uid, filter);
 

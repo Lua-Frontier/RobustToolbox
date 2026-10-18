@@ -54,6 +54,55 @@ END TEMPLATE-->
 *None yet*
 
 
+## 293.0.1
+
+### Breaking changes
+
+* ImageSharp's dynamic/automatic decoder detection code (used in Image.Load()) no longer includes TIFF (due to security vulnerabilities)
+
+
+## 293.0.0
+
+### Breaking changes
+* Transform lerping rework from the previous release (292.0.0) has been reverted due to unforseen bugs. As a short summary, this should have the following impact: The lerping-related fields in TransformComponent (`NextPosition`, `NextRotation `, `PrevPosition `, `PrevRotation` , `ActivelyLerping` , `LastLerp` ) are back; The lerping-related cvars (`NetInterpMaxDistance`, `NetInterpMinDistance`, `NetInterpCorrectionHalfLife`, `NetInterpCorrectionMinTranslation`, `NetInterpCorrectionMinRotation`) and the `RenderTransform` struct are gone; The related functions in TransformSystem (i.e `ActivateLerp` , `GetRender...`, etc) have been removed.
+
+### Other
+
+* `SpawnEntity` and the `EntityCoordinates` version of `SpawnEntities` have been marked as obsolete.
+
+
+## 292.0.0
+
+### Breaking changes
+
+* `BoundUserInterfaceMessageAttempt` is now a by-ref struct. It can no longer be assigned to `CancellableEntityEventArgs`.
+* TransformComponent.Anchored setter is now removed. All anchoring is done via TransformSystem.TryAnchor / TransformSystem.AnchorEntity.
+* ReAnchorEvent has been removed for grid splitting and now normal unanchor / anchor events are raised.
+* Transform lerping has been reworked to handle dropped ticks and position corrections in cases of mispredicts.
+  It will also no longer raise MoveEvent on FrameUpdates as the TransformComponent fields will reflect the simulation data.
+  To get the render position on client use the equivalent Render methods e.g. GetRenderWorldPosition. This will have any relevant corrections or lerping applied.
+  Any teleports should call SnapRenderTransform to ensure lerping isn't run in scenarios where it is unwanted.
+
+### New features
+
+* Added SpriteComponent.LayerData for read-only list access to layers.
+* Persist the entity spawn menu placement mode in a CVar.
+* Added GetIntersectingTrees to ComponentTreeSystem for an allocation-free way to get the relevant trees.
+* Expose IClyde.MouseMove as an event for when the mouse is moved.
+
+### Bugfixes
+
+* Rollback the LastModifiedTick for components when re-running state handling on the client.
+* Fix `display.compat` and `display.angle` being set to true at the same time crashing the game.
+* Fix the client sometimes not re-applying container states correctly when using `EnsureEntity`.
+* Added some PendingAck locks to fix some race conditions around client connection state and PvsSystem Acks.
+
+### Internal
+
+* Removed internal parallel solving for islands to simplify physics code and significantly reduce allocations. Now all islands will be solved in parallel regardless of size.
+* Fix BroadphaseContactJob allocations.
+
+
 ## 291.0.0
 
 ### Breaking changes

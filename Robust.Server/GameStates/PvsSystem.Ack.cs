@@ -26,12 +26,12 @@ internal sealed partial class PvsSystem
         if (!PlayerData.TryGetValue(session, out var sessionData))
             return;
 
-        if (ackedTick <= sessionData.LastReceivedAck)
-            return;
-
-        sessionData.LastReceivedAck = ackedTick;
         lock (PendingAcks)
         {
+            if (ackedTick <= sessionData.LastReceivedAck)
+                return;
+
+            sessionData.LastReceivedAck = ackedTick;
             PendingAcks.Add(session);
         }
     }

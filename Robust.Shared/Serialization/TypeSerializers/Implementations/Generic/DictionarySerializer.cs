@@ -86,6 +86,10 @@ public sealed class DictionarySerializer<TKey, TValue> :
             if (keyNode is not ValueDataNode valueNode)
                 throw new NotSupportedException("Yaml mapping keys must serialize to a ValueDataNode (i.e. a string)");
 
+            if ((typeof(TKey) == typeof(Robust.Shared.GameObjects.EntityUid) ||
+                 typeof(TKey) == typeof(Robust.Shared.GameObjects.NetEntity)) && valueNode.Value == "invalid")
+                continue;
+
             mappingNode.Add(
                 valueNode.Value,
                 serializationManager.WriteValue(val, alwaysWrite, context));

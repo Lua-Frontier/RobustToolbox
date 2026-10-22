@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Robust.Shared.Configuration;
@@ -62,6 +63,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
     public readonly Dictionary<EntityUid, int> YamlUidMap = new();
     public readonly HashSet<int> YamlIds = new();
     public readonly ValueDataNode InvalidNode = new("invalid");
+    /// <summary>Use stable references in documents that will be merged into another entity document.</summary>
+    public bool UsePersistentEntityReferences;
 
     public const string TruncatedReference = "truncated";
 
@@ -73,6 +76,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
     public string? CurrentComponent { get; private set; }
     public Entity<MetaDataComponent>? CurrentEntity { get; private set; }
     public int CurrentEntityYamlUid { get; private set; }
+
+    public Action<string, double, bool>? ComponentWriteMeasured;
 
     /// <summary>
     /// Tile ID -> yaml tile ID mapping.
@@ -269,6 +274,37 @@ public sealed partial class EntitySerializer : ISerializationContext,
         ReserveYamlIds(entities);
         SerializeEntitiesInternal(entities);
         Truncate = EntityUid.Invalid;
+    }
+
+    public IEnumerator<EntityUid> SerializeEntityRecursiveSteps(EntityUid root, Action<EntityUid>? beforeWrite = null)
+    {
+        if (!IsSerializable(root))
+            throw new Exception($"{EntMan.ToPrettyString(root)} is not serializable");
+
+        Truncate = _xformQuery.GetComponent(root).ParentUid;
+        Truncated.Add(Truncate);
+        InitializeTileMap(root);
+        HashSet<EntityUid> entities = new();
+        RecursivelyIncludeChildren(root, entities);
+        ReserveYamlIds(entities);
+        try
+        {
+            foreach (var uid in entities)
+            {
+                DebugTools.AssertNull(CurrentEntity);
+                beforeWrite?.Invoke(uid);
+                SerializeEntityInternal(uid);
+                yield return uid;
+            }
+            if (_autoInclude.Count != 0) ProcessAutoInclude();
+        }
+        finally
+        {
+            Truncate = EntityUid.Invalid;
+            CurrentEntity = null;
+            CurrentEntityYamlUid = 0;
+            CurrentComponent = null;
+        }
     }
 
     /// <summary>
@@ -558,13 +594,14 @@ public sealed partial class EntitySerializer : ISerializationContext,
             xform._localRotation = 0;
         }
 
+        var prototypeFailed = false;
         try
         {
-            SerializeComponents(uid, cache, components);
+            SerializeComponents(uid, meta.EntityPrototype, cache, components, ref prototypeFailed);
         }
         catch(Exception e)
         {
-            if (Options.EntityExceptionBehaviour == EntityExceptionBehaviour.Rethrow)
+            if (prototypeFailed || Options.EntityExceptionBehaviour == EntityExceptionBehaviour.Rethrow)
             {
                 _log.Error($"Caught exception while serializing component {CurrentComponent} of entity {EntMan.ToPrettyString(uid)}");
                 throw;
@@ -646,7 +683,8 @@ public sealed partial class EntitySerializer : ISerializationContext,
         }
     }
 
-    private void SerializeComponents(EntityUid uid, Dictionary<string, MappingDataNode>? cache, SequenceDataNode components)
+    private void SerializeComponents(EntityUid uid, EntityPrototype? prototype, Dictionary<string, MappingDataNode>? cache,
+        SequenceDataNode components, ref bool prototypeFailed)
     {
         foreach (var component in EntMan.GetComponentsInternal(uid))
         {
@@ -664,7 +702,19 @@ public sealed partial class EntitySerializer : ISerializationContext,
             CurrentComponent = reg.Name;
             MappingDataNode? compMapping;
             MappingDataNode? protoMapping = null;
-            if (cache != null && cache.TryGetValue(reg.Name, out protoMapping))
+            if (cache != null && !cache.TryGetValue(reg.Name, out protoMapping) &&
+                prototype != null && prototype.Components.TryGetValue(reg.Name, out var protoComponent))
+            {
+                WritingReadingPrototypes = true;
+                try
+                {
+                    protoMapping = SerializeComponent(protoComponent.Component, protoComponent.Component.GetType(), alwaysWrite: true);
+                    cache.Add(reg.Name, protoMapping);
+                }
+                catch { prototypeFailed = true; throw; }
+                finally { WritingReadingPrototypes = false; }
+            }
+            if (protoMapping != null)
             {
                 // If this has a prototype, we need to use alwaysWrite: true.
                 // E.g., an anchored prototype might have anchored: true. If we we are saving an un-anchored
@@ -697,15 +747,24 @@ public sealed partial class EntitySerializer : ISerializationContext,
 
     private MappingDataNode SerializeComponent(IComponent component, Type componentType, bool alwaysWrite)
     {
-        MappingDataNode? mapping = null;
-        var handled = false;
-        OnSerializeComponent?.Invoke(component, _serialization, this, alwaysWrite, ref mapping, ref handled);
+        var observer = ComponentWriteMeasured;
+        var started = observer == null ? 0 : Stopwatch.GetTimestamp();
+        try
+        {
+            MappingDataNode? mapping = null;
+            var handled = false;
+            OnSerializeComponent?.Invoke(component, _serialization, this, alwaysWrite, ref mapping, ref handled);
 
-        if (!handled)
-            return _serialization.WriteValueAs<MappingDataNode>(componentType, component, alwaysWrite, this);
+            if (!handled)
+                return _serialization.WriteValueAs<MappingDataNode>(componentType, component, alwaysWrite, this);
 
-        return mapping ?? throw new InvalidOperationException(
-            $"Component serialization hook handled {componentType} without returning a mapping.");
+            return mapping ?? throw new InvalidOperationException(
+                $"Component serialization hook handled {componentType} without returning a mapping.");
+        }
+        finally
+        {
+            observer?.Invoke(CurrentComponent!, Stopwatch.GetElapsedTime(started).TotalMilliseconds, WritingReadingPrototypes);
+        }
     }
 
     private Dictionary<string, MappingDataNode>? GetProtoCache(EntityPrototype? proto)
@@ -717,19 +776,25 @@ public sealed partial class EntitySerializer : ISerializationContext,
             return cache;
 
         PrototypeCache[proto.ID] = cache = new(proto.Components.Count);
-        WritingReadingPrototypes = true;
-
-        foreach (var (compName, comp) in proto.Components)
-        {
-            CurrentComponent = compName;
-            cache.Add(compName, SerializeComponent(comp.Component, comp.Component.GetType(), alwaysWrite: true));
-        }
-
-        CurrentComponent = null;
-        WritingReadingPrototypes = false;
-        cache.TryAdd(_metaName, _emptyMetaNode);
-        cache.TryAdd(_xformName, _emptyXformNode);
+        if (!proto.Components.ContainsKey(_metaName)) cache.Add(_metaName, _emptyMetaNode);
+        if (!proto.Components.ContainsKey(_xformName)) cache.Add(_xformName, _emptyXformNode);
         return cache;
+    }
+
+    public IEnumerator<string> WarmPrototypeSteps(EntityPrototype prototype)
+    {
+        var cache = GetProtoCache(prototype)!;
+        foreach (var (name, entry) in prototype.Components)
+        {
+            var type = entry.Component.GetType();
+            if (cache.ContainsKey(name) || _factory.GetRegistration(type).Unsaved || Options.IgnoredComponents?.Contains(type) == true)
+                continue;
+            CurrentComponent = name;
+            WritingReadingPrototypes = true;
+            try { cache[name] = SerializeComponent(entry.Component, type, alwaysWrite: true); }
+            finally { WritingReadingPrototypes = false; CurrentComponent = null; }
+            yield return name;
+        }
     }
 
     #region Write
@@ -1033,6 +1098,9 @@ public sealed partial class EntitySerializer : ISerializationContext,
         bool alwaysWrite = false,
         ISerializationContext? context = null)
     {
+        if (UsePersistentEntityReferences && !WritingReadingPrototypes && value != EntityUid.Invalid &&
+            EntMan.TryGetComponent(value, out MetaDataComponent? persistentMeta))
+            return new ValueDataNode("@" + EntMan.GuIds.Ensure(value, persistentMeta).ToString("D"));
         if (YamlUidMap.TryGetValue(value, out var yamlId))
             return new ValueDataNode(yamlId.ToString(CultureInfo.InvariantCulture));
 
@@ -1084,6 +1152,9 @@ public sealed partial class EntitySerializer : ISerializationContext,
 
             return InvalidNode;
         }
+
+        if (EntMan.GuIds.TryGetReference(value, out var referenceGuid))
+            return new ValueDataNode("@" + referenceGuid.ToString("D"));
 
         switch (Options.MissingEntityBehaviour)
         {

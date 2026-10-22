@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Globalization;
-using System.Linq.Expressions;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Robust.Shared.Serialization.Manager.Definition;
 using Robust.Shared.Serialization.Manager.Exceptions;
 using Robust.Shared.Serialization.Markdown;
@@ -32,185 +33,37 @@ public sealed partial class SerializationManager
     private readonly ConcurrentDictionary<(Type baseType, Type actualType, bool), object> _writeGenericBaseDelegates = new();
     private readonly ConcurrentDictionary<(Type, bool), object> _writeGenericDelegates = new();
 
+    private static readonly MethodInfo BoxedWriterFactory = typeof(SerializationManager)
+        .GetMethod(nameof(CreateBoxedWriter), BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private WriteBoxingDelegate CreateBoxedWriter<T>(bool notNullableOverride)
+        => (value, alwaysWrite, context) => WriteValue((T)value, alwaysWrite, context, notNullableOverride);
+
     private WriteBoxingDelegate GetOrCreateWriteBoxingDelegate(Type type, bool notNullableOverride)
     {
         return _writeBoxingDelegates.GetOrAdd((type, notNullableOverride), static (tuple, manager) =>
         {
-            var type = tuple.Item1;
-            var managerConst = Expression.Constant(manager);
-
-            var valueParam = Expression.Variable(typeof(object));
-            var alwaysWrite = Expression.Variable(typeof(bool));
-            var contextParam = Expression.Variable(typeof(ISerializationContext));
-
-            var call = Expression.Call(
-                managerConst,
-                nameof(WriteValue),
-                new[] { type },
-                Expression.Convert(valueParam, type),
-                alwaysWrite,
-                contextParam,
-                Expression.Constant(tuple.Item2));
-
-            return Expression.Lambda<WriteBoxingDelegate>(
-                call,
-                valueParam,
-                alwaysWrite,
-                contextParam).Compile();
+            return (WriteBoxingDelegate)BoxedWriterFactory.MakeGenericMethod(tuple.Item1)
+                .Invoke(manager, new object[] { tuple.Item2 })!;
         }, this);
     }
 
     private WriteGenericDelegate<T> GetOrCreateWriteGenericDelegate<T>(T value, bool notNullableOverride)
     {
-        static object ValueFactory(Type baseType, Type actualType, bool notNullableOverride, SerializationManager serializationManager)
+        static object ValueFactory(Type baseType, Type actualType, bool notNullableOverride, SerializationManager manager)
         {
-            var instanceParam = Expression.Constant(serializationManager);
-            var objParam = Expression.Parameter(baseType, "value");
-            var alwaysWriteParam = Expression.Parameter(typeof(bool), "alwaysWrite");
-            var contextParam = Expression.Parameter(typeof(ISerializationContext), "context");
-
             actualType = actualType.EnsureNotNullableType();
             var sameType = baseType.EnsureNotNullableType() == actualType;
+            if (baseType.IsGenericType && (baseType.GetGenericTypeDefinition() == typeof(FrozenDictionary<,>)
+                || baseType.GetGenericTypeDefinition() == typeof(FrozenSet<>)))
+                actualType = baseType;
 
-            Expression objAccess = baseType.IsNullable()
-                ? Expression.Convert(objParam, sameType ? baseType.EnsureNotNullableType() : actualType)
-                : sameType ? objParam : Expression.Convert(objParam, actualType);
-
-            if (baseType.IsGenericType)
-            {
-                // Frozen dictionaries/sets are abstract and have a bunch of implementations, but we always serialize them as their abstract type.
-                var t = baseType.GetGenericTypeDefinition();
-                if (t == typeof(FrozenDictionary<,>) || t == typeof(FrozenSet<>))
-                    actualType = baseType;
-            }
-
-            Expression call;
-            if (serializationManager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeWriter<>), actualType, out var serializer))
-            {
-                var serializerConst = Expression.Constant(serializer);
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteValue),
-                    new []{actualType},
-                    serializerConst,
-                    objAccess,
-                    alwaysWriteParam,
-                    contextParam,
-                    Expression.Constant(notNullableOverride)
-                );
-            }
-            else if (actualType.IsEnum)
-            {
-                // When writing generic enums, we want to use the enum serializer.
-                // Otherwise, we fall back to the default IConvertible behaviour.
-
-                if (baseType != typeof(Enum) ||
-                    !serializationManager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeWriter<>),
-                        typeof(Enum), out serializer))
-                {
-                    call = Expression.Call(
-                        instanceParam,
-                        nameof(WriteConvertible),
-                        Type.EmptyTypes,
-                        Expression.Convert(objParam, typeof(IConvertible)));
-                }
-                else
-                {
-                    var serializerConst = Expression.Constant(serializer);
-                    call = Expression.Call(
-                        instanceParam,
-                        nameof(WriteValue),
-                        new []{typeof(Enum)},
-                        serializerConst,
-                        Expression.Convert(objParam, typeof(Enum)),
-                        alwaysWriteParam,
-                        contextParam,
-                        Expression.Constant(notNullableOverride)
-                    );
-                }
-            }
-            else if (actualType.IsArray)
-            {
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteArray),
-                    new []{ actualType.GetElementType()! },
-                    Expression.Convert(objParam, actualType),
-                    alwaysWriteParam,
-                    contextParam);
-            }
-            else if (typeof(ISelfSerialize).IsAssignableFrom(actualType))
-            {
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteSelfSerializable),
-                    Type.EmptyTypes,
-                    Expression.Convert(objParam, typeof(ISelfSerialize)));
-            }
-            else if (actualType.IsAssignableTo(typeof(ISerializationGenerated<>).MakeGenericType(actualType)))
-            {
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteValueInternal),
-                    new[] { actualType },
-                    objAccess,
-                    Expression.Constant(serializationManager.GetDefinition(actualType), typeof(DataDefinition<>).MakeGenericType(actualType)),
-                    alwaysWriteParam,
-                    contextParam);
-
-                if (!sameType)
-                {
-                    var nodeVar = Expression.Variable(typeof(DataNode));
-                    call = Expression.Block(
-                        new[] { nodeVar },
-                        Expression.Assign(nodeVar, call),
-                        Expression.Assign(Expression.Field(nodeVar, "Tag"), Expression.Constant($"!type:{actualType.Name}")),
-                        nodeVar);
-                }
-            }
-            else
-            {
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteNoSerializer),
-                    Type.EmptyTypes,
-                    Expression.Constant(actualType, typeof(Type)));
-            }
-
-            // check for customtypeserializer before anything
-            var serializerType = typeof(ITypeWriter<>).MakeGenericType(actualType);
-            var serializerVar = Expression.Variable(serializerType);
-            call = Expression.Block(
-                new[] { serializerVar },
-                Expression.Condition(
-                    Expression.AndAlso(
-                        Expression.ReferenceNotEqual(contextParam,
-                            Expression.Constant(null, typeof(ISerializationContext))),
-                        Expression.Call(
-                            Expression.Property(contextParam, "SerializerProvider"),
-                            "TryGetTypeSerializer",
-                            new[] { serializerType, actualType },
-                            serializerVar)),
-                    Expression.Call(
-                        instanceParam,
-                        nameof(WriteValue),
-                        new []{actualType},
-                        serializerVar,
-                        objAccess,
-                        alwaysWriteParam,
-                        contextParam,
-                        Expression.Constant(notNullableOverride)),
-                    call));
-
-            return Expression.Lambda<WriteGenericDelegate<T>>(
-                call,
-                objParam,
-                alwaysWriteParam,
-                contextParam).Compile();
+            return TypedWriterFactory.MakeGenericMethod(baseType, actualType)
+                .Invoke(manager, new object[] { notNullableOverride, sameType })!;
         }
 
         var type = typeof(T);
-        if (!type.IsSealed) // abstract classes, virtual classes, and interfaces.
+        if (!type.IsSealed)
         {
             return (WriteGenericDelegate<T>)_writeGenericBaseDelegates.GetOrAdd((type, value!.GetType(), notNullableOverride),
                 static (tuple, manager) => ValueFactory(tuple.baseType, tuple.actualType, tuple.Item3, manager), this);
@@ -218,6 +71,66 @@ public sealed partial class SerializationManager
 
         return (WriteGenericDelegate<T>) _writeGenericDelegates
             .GetOrAdd((type, notNullableOverride), static (tuple, manager) => ValueFactory(tuple.Item1, tuple.Item1, tuple.Item2, manager), this);
+    }
+
+    private static readonly MethodInfo TypedWriterFactory = typeof(SerializationManager)
+        .GetMethod(nameof(CreateTypedWriter), BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo ArrayWriterFactory = typeof(SerializationManager)
+        .GetMethod(nameof(CreateArrayWriter), BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo GeneratedWriterFactory = typeof(SerializationManager)
+        .GetMethod(nameof(CreateGeneratedWriter), BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private WriteGenericDelegate<TBase> CreateTypedWriter<TBase, TActual>(bool notNullableOverride, bool sameType)
+    {
+        WriteGenericDelegate<TActual> fallback;
+        if (_regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeWriter<>), typeof(TActual), out var serializer))
+        {
+            var writer = (ITypeWriter<TActual>)serializer;
+            fallback = (value, alwaysWrite, context) => WriteValue(writer, value, alwaysWrite, context, notNullableOverride);
+        }
+        else if (typeof(TActual).IsEnum)
+        {
+            if (typeof(TBase) == typeof(Enum) && _regularSerializerProvider.TryGetTypeSerializer(
+                    typeof(ITypeWriter<>), typeof(Enum), out serializer))
+            {
+                var writer = (ITypeWriter<Enum>)serializer;
+                fallback = (value, alwaysWrite, context) => WriteValue(writer, (Enum)(object)value!, alwaysWrite, context, notNullableOverride);
+            }
+            else fallback = (value, _, _) => WriteConvertible((IConvertible)value!);
+        }
+        else if (typeof(TActual).IsArray)
+            fallback = (WriteGenericDelegate<TActual>)ArrayWriterFactory.MakeGenericMethod(typeof(TActual).GetElementType()!)
+                .Invoke(this, null)!;
+        else if (typeof(ISelfSerialize).IsAssignableFrom(typeof(TActual)))
+            fallback = (value, _, _) => WriteSelfSerializable((ISelfSerialize)value!);
+        else if (typeof(TActual).IsAssignableTo(typeof(ISerializationGenerated<>).MakeGenericType(typeof(TActual))))
+            fallback = (WriteGenericDelegate<TActual>)GeneratedWriterFactory.MakeGenericMethod(typeof(TActual))
+                .Invoke(this, new object[] { sameType })!;
+        else fallback = (_, _, _) => WriteNoSerializer(typeof(TActual));
+
+        return (value, alwaysWrite, context) =>
+        {
+            var actual = typeof(TBase) == typeof(TActual)
+                ? Unsafe.As<TBase, TActual>(ref value)
+                : (TActual)(object)value!;
+            if (context != null && context.SerializerProvider.TryGetTypeSerializer<ITypeWriter<TActual>, TActual>(out var custom))
+                return WriteValue(custom, actual, alwaysWrite, context, notNullableOverride);
+            return fallback(actual, alwaysWrite, context);
+        };
+    }
+
+    private WriteGenericDelegate<TElement[]> CreateArrayWriter<TElement>()
+        => WriteArray;
+
+    private WriteGenericDelegate<T> CreateGeneratedWriter<T>(bool sameType) where T : ISerializationGenerated<T>
+    {
+        var definition = GetDefinition(typeof(T)) as DataDefinition<T>;
+        return (value, alwaysWrite, context) =>
+        {
+            var node = WriteValueInternal(value, definition, alwaysWrite, context);
+            if (!sameType) node.Tag = $"!type:{typeof(T).Name}";
+            return node;
+        };
     }
 
     private DataNode WriteConvertible(IConvertible obj)

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Robust.Shared.GameObjects;
@@ -165,6 +166,7 @@ internal sealed partial class PvsSystem
 
     private void CacheGlobalOverrides()
     {
+        _pvsOverride.PruneInvalidOverrides();
         _cachedForceOverride.Clear();
         _forceOverrideSet.Clear();
         foreach (var uid in _pvsOverride.ForceSend)
@@ -176,8 +178,8 @@ internal sealed partial class PvsSystem
         _globalOverrideSet.Clear();
         foreach (var uid in _pvsOverride.GlobalOverride)
         {
-            CacheOverrideParents(uid, _cachedGlobalOverride, _globalOverrideSet, out var xform);
-            CacheOverrideChildren(xform, _cachedGlobalOverride, _globalOverrideSet);
+            if (CacheOverrideParents(uid, _cachedGlobalOverride, _globalOverrideSet, out var xform))
+                CacheOverrideChildren(xform, _cachedGlobalOverride, _globalOverrideSet);
         }
     }
 
@@ -185,22 +187,18 @@ internal sealed partial class PvsSystem
         EntityUid uid,
         List<PvsChunk.ChunkEntity> list,
         HashSet<EntityUid> set,
-        out TransformComponent xform)
+        [NotNullWhen(true)] out TransformComponent? xform)
     {
-        xform = _xformQuery.GetComponent(uid);
+        if (!_xformQuery.TryGetComponent(uid, out xform) ||
+            !_metaQuery.TryGetComponent(uid, out var meta) ||
+            meta.EntityLifeStage >= EntityLifeStage.Terminating)
+            return false;
 
         if (xform.ParentUid != EntityUid.Invalid && !CacheOverrideParents(xform.ParentUid, list, set, out _))
             return false;
 
         if (!set.Add(uid))
             return true;
-
-        if (!_metaQuery.TryGetComponent(uid, out var meta))
-        {
-            Log.Error($"Encountered deleted entity in global overrides: {uid}");
-            set.Remove(uid);
-            return false;
-        }
 
         list.Add(new(uid, meta));
         return true;
@@ -216,8 +214,11 @@ internal sealed partial class PvsSystem
                 continue;
             }
 
+            if (!_metaQuery.TryGetComponent(child, out var meta) ||
+                meta.EntityLifeStage >= EntityLifeStage.Terminating)
+                continue;
             if (set.Add(child))
-                list.Add(new(child, _metaQuery.GetComponent(child)));
+                list.Add(new(child, meta));
 
             CacheOverrideChildren(childXform, list, set);
         }

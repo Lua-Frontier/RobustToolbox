@@ -433,9 +433,9 @@ cmd-tp-desc = Teleports a player to any location in the round.
 cmd-tp-help = Usage: {$command} <x> <y> [<mapID>]
 
 cmd-tpto-desc = Teleports the current player or the specified players/entities to the location of the first player/entity.
-cmd-tpto-help = Usage: {$command} <username|uid> [username|NetEntity]...
-cmd-tpto-destination-hint = destination (NetEntity or username)
-cmd-tpto-victim-hint = entity to teleport (NetEntity or username)
+cmd-tpto-help = Usage: {$command} <username|uid|guid> [username|NetEntity|guid]...
+cmd-tpto-destination-hint = destination (NetEntity, guid or username)
+cmd-tpto-victim-hint = entity to teleport (NetEntity, guid or username)
 cmd-tpto-parse-error = Cant resolve entity or player: {$str}
 
 cmd-listplayers-desc = Lists all players currently connected.

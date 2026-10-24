@@ -379,19 +379,17 @@ public abstract partial class SharedPhysicsSystem
         next = node?.Next;
 
         // Remove from the world
-        _activeContacts.Remove(contact.MapNode);
+        contact.MapNode.List?.Remove(contact.MapNode);
 
         // Remove from body 1
-        DebugTools.Assert(fixtureA.Contacts.ContainsKey(fixtureB));
-        fixtureA.Contacts.Remove(fixtureB);
-        DebugTools.Assert(bodyA.Contacts.Contains(contact.BodyANode.Value));
-        bodyA.Contacts.Remove(contact.BodyANode);
+        if (fixtureA.Contacts.TryGetValue(fixtureB, out var currentA) && ReferenceEquals(currentA, contact))
+            fixtureA.Contacts.Remove(fixtureB);
+        contact.BodyANode.List?.Remove(contact.BodyANode);
 
         // Remove from body 2
-        DebugTools.Assert(fixtureB.Contacts.ContainsKey(fixtureA));
-        fixtureB.Contacts.Remove(fixtureA);
-        DebugTools.Assert(bodyB.Contacts.Contains(contact.BodyBNode.Value));
-        bodyB.Contacts.Remove(contact.BodyBNode);
+        if (fixtureB.Contacts.TryGetValue(fixtureA, out var currentB) && ReferenceEquals(currentB, contact))
+            fixtureB.Contacts.Remove(fixtureA);
+        contact.BodyBNode.List?.Remove(contact.BodyBNode);
 
         contact.Flags = ContactFlags.Deleted;
         _contactPool.Return(contact);

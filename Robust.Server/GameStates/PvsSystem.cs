@@ -280,6 +280,7 @@ internal sealed partial class PvsSystem : EntitySystem
 
         var sb = new StringBuilder();
         sb.Append($"Client {session} requested full state on tick {tick}. Last Acked: {lastAcked}. Curtick: {_gameTiming.CurTick}.");
+        sb.Append($" Last full state sent: {pvsSession.LastFullStateSentTick} ({pvsSession.LastFullStateSentBytes} bytes).");
 
         if (missingEntity != null)
         {
@@ -544,7 +545,7 @@ internal sealed partial class PvsSystem : EntitySystem
             return;
         }
 
-        var cullTick = new GameTick(Math.Max(_oldestAck, _gameTiming.CurTick.Value > (uint)ForceAckThreshold ? _gameTiming.CurTick.Value - (uint)ForceAckThreshold : 0));
+        var cullTick = new GameTick(_oldestAck);
         if (cullTick == _lastOldestAck)
             return;
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -293,14 +293,17 @@ namespace Robust.Shared.ContentPack
                         msg = $"{msg}, type: {type}";
                     }
 
-                    foreach (var argument in res.ErrorArguments)
+                    if (res.ErrorArguments != null)
                     {
-                        if (argument.Name == "Token" && argument.Value is int token)
-                            msg = $"{msg}, {argument.Name} 0x{token:X8}";
-                        else if (argument.Name == "Offset" && argument.Value is int offset)
-                            msg = $"{msg}, {argument.Name} IL_{offset:X4}";
-                        else
-                            msg = $"{msg}, {argument.Name} {argument.Value}";
+                        foreach (var argument in res.ErrorArguments)
+                        {
+                            if (argument.Name == "Token" && argument.Value is int token)
+                                msg = $"{msg}, {argument.Name} 0x{token:X8}";
+                            else if (argument.Name == "Offset" && argument.Value is int offset)
+                                msg = $"{msg}, {argument.Name} IL_{offset:X4}";
+                            else
+                                msg = $"{msg}, {argument.Name} {argument.Value}";
+                        }
                     }
                 }
                 catch (UnsupportedMetadataException e)

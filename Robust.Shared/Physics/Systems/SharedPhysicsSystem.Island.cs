@@ -506,6 +506,15 @@ public abstract partial class SharedPhysicsSystem
                         !bodyB.CanCollide)
                         continue;
 
+                    if (joint.BodyAUid == joint.BodyBUid ||
+                        !XformQuery.TryComp(joint.BodyAUid, out var jointXformA) ||
+                        !XformQuery.TryComp(joint.BodyBUid, out var jointXformB) ||
+                        jointXformA.MapUid != mapUid || jointXformB.MapUid != mapUid)
+                    {
+                        original.IslandFlag = false;
+                        continue;
+                    }
+
                     joints.Add((original, joint));
 
                     if (!bodyA.Island)

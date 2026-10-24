@@ -89,6 +89,10 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     /// </summary>
     public TimeSpan FullStateRequestCooldownEnd;
 
+    public GameTick LastFullStateSentTick;
+    public int LastFullStateSentBytes;
+    public long DeferredStateCount;
+
     /// <summary>
     /// List of entity states to send to the client.
     /// </summary>

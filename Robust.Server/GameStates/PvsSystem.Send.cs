@@ -1,4 +1,5 @@
 using System;
+using Lidgren.Network;
 using Prometheus;
 using Robust.Shared.Log;
 using Robust.Shared.Network.Messages;
@@ -42,6 +43,12 @@ internal sealed partial class PvsSystem
             if (!data.Session.Channel.IsConnected)
                 return;
 
+            if (!data.Session.Channel.CanSendImmediately(NetDeliveryMethod.ReliableUnordered, 0))
+            {
+                data.DeferredStateCount++;
+                return;
+            }
+
             DebugTools.AssertNotEqual(stateStream, null);
             var msg = new MsgState
             {
@@ -51,6 +58,12 @@ internal sealed partial class PvsSystem
             };
 
             _netMan.ServerSendMessage(msg, data.Session.Channel);
+            if (msg.HasWritten && data.FromTick == GameTick.Zero)
+            {
+                data.LastFullStateSentTick = sendTick;
+                data.LastFullStateSentBytes = msg.MsgSize;
+                Log.Info($"Full state sent to {data.Session}: tick={sendTick}, raw={stateStream!.Length}, packet={msg.MsgSize}, reliable={msg.ShouldSendReliably()}");
+            }
             // The channel can disconnect between our check and the network manager's check.
             if (msg.HasWritten && msg.ShouldSendReliably())
             {
